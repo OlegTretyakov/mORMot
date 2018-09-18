@@ -358,6 +358,7 @@ type
     function GetTableIndex(aTable: TSQLRecordClass): integer; overload;
     /// get index of aTable in Tables[], returns -1 if not found
     function GetTableIndex(const aTableName: string): integer; overload;
+    function GetTableIndexInherits(aTable: TSQLRecordClass): integer;
     /// get index of aTable in Tables[], raise an ERestException if not found
     function GetTableIndexExisting(aTable: TSQLRecordClass): integer;
     /// get the RTTI information for the specified class or raise an ERestException
@@ -532,6 +533,8 @@ type
     // application
     property Data: TSQLRawBlob read fData write fData;
   end;
+
+  TSQLAuthUserClass = class of TSQLAuthUser;
 
   TSQLRestServerAuthentication = class;
 
@@ -1024,6 +1027,8 @@ type
     /// delete a member
     function Delete(Table: TSQLRecordClass; ID: TID): boolean; override;
 
+    function CallBackGetResponse(const aMethodName: string;
+      const aNameValueParameters: array of const): string;
     /// wrapper to the protected URI method to call a method on the server
     // - perform a ModelRoot/[TableName/[ID/]]MethodName RESTful GET request
     // - if no Table is expected, set aTable=nil (we do not define nil as
@@ -1064,7 +1069,7 @@ type
     function CallRemoteServiceSynch(aCaller: TServiceClientAbstract;
       const aMethodName: string; aExpectedOutputParamsCount: integer;
       const aInputParams: array of variant; aReturnsCustomAnswer: boolean=false): TVariantDynArray;
-    {$else}
+    {$else ISSMS}
     /// execute a specified interface-based service method on the server
     // - this blocking method would raise an EServiceException on error
     // - you should not call it, but directly TServiceClient* methods
@@ -1109,18 +1114,20 @@ type
   /// abstract class used for client authentication
   TSQLRestServerAuthentication = class
   protected
+    fClient : TSQLRestClientURI;
     fUser: TSQLAuthUser;
     fSessionID: cardinal;
     fSessionIDHexa8: string;
+    fSessionTimeOut : Integer;
+    fSessionServer : string;
     procedure SetSessionID(Value: Cardinal);
     // override this method to return the session key
-    function ClientComputeSessionKey(Sender: TSQLRestClientURI): string;
+    function ClientComputeSessionKey: string;
       virtual; abstract;
-    function ClientSessionComputeSignature(Sender: TSQLRestClientURI;
-      const url: string): string; virtual; abstract;
+    function ClientSessionComputeSignature(const url: string): string; virtual; abstract;
   public
     /// initialize client authentication instance, i.e. the User associated instance
-    constructor Create(const aUserName, aPassword: string;
+    constructor Create(AClient : TSQLRestClientURI; const aUserName, aPassword: string;
       aHashedPassword: Boolean=false);
     /// finalize the instance
     destructor Destroy; override;
@@ -1128,24 +1135,24 @@ type
     // - only LogonName and PasswordHashHexa are set here
     property User: TSQLAuthUser read fUser;
     /// contains the session ID used for the authentication
-    property SessionID: cardinal read fSessionID;
+    property SessionID: cardinal read fSessionID;  
+    property SessionTimeOut : Integer read fSessionTimeOut;
+    property SessionServer : string read fSessionServer;
   end;
 
   /// mORMot secure RESTful authentication scheme
   TSQLRestServerAuthenticationDefault = class(TSQLRestServerAuthentication)
   protected
     fSessionPrivateKey: hash32;
-    function ClientComputeSessionKey(Sender: TSQLRestClientURI): string; override;
-    function ClientSessionComputeSignature(Sender: TSQLRestClientURI;
-      const url: string): string; override;
+    function ClientComputeSessionKey: string; override;
+    function ClientSessionComputeSignature(const url: string): string; override;
   end;
 
   /// mORMot weak RESTful authentication scheme
   TSQLRestServerAuthenticationNone = class(TSQLRestServerAuthentication)
   protected
-    function ClientComputeSessionKey(Sender: TSQLRestClientURI): string; override;
-    function ClientSessionComputeSignature(Sender: TSQLRestClientURI;
-      const url: string): string; override;
+    function ClientComputeSessionKey: string; override;
+    function ClientSessionComputeSignature(const url: string): string; override;
   end;
 
   /// REST client via HTTP
@@ -1333,25 +1340,27 @@ var tmpIsString: Boolean;
     i,deb,arg,maxArgs,SQLWhereLen: integer;
 {$ifdef ISSMS}
     args: variant; // open parameters are not a true array in JavaScript
+{$endif}
 begin
+  {$ifdef ISSMS}
   asm
     @args=@BoundsSQLWhere;
   end;
   maxArgs := args.length-1;
-{$else}
-begin
-  maxArgs := high(BoundsSQLWhere);
-{$endif}
   result := '';
   arg := 0;
   deb := 1;
   i := 1; // we need i after then main loop -> do not use for i := 1 to ...
   SQLWhereLen := length(SQLWhere);
   while i<=SQLWhereLen do
-    if SQLWhere[i]='?' then begin
+  begin
+    if SQLWhere[i]='?' then
+    begin
       result := result+copy(SQLWhere,deb,i-deb)+':(';
       if arg>maxArgs then
-        tmp := 'null' else begin
+        tmp := 'null' 
+      else
+      begin
         tmp := VarRecToValue(
           {$ifdef ISSMS}args{$else}BoundsSQLWhere{$endif}[arg],tmpIsString);
         if tmpIsString then
@@ -1363,8 +1372,40 @@ begin
       deb := i;
     end else
       inc(i);
+  end;
   result := result+copy(SQLWhere,deb,i-deb);
 end;
+{$else}
+  maxArgs := high(BoundsSQLWhere);
+  result := '';
+  arg := 0;
+  deb := 1;
+  i := 1; // we need i after then main loop -> do not use for i := 1 to ...
+  SQLWhereLen := length(SQLWhere);
+  while i<=SQLWhereLen do
+  begin
+    if SQLWhere[i]='?' then
+    begin
+      result := result+copy(SQLWhere,deb,i-deb)+':(';
+      if arg>maxArgs then
+        tmp := 'null' 
+      else
+      begin
+        tmp := VarRecToValue(
+          {$ifdef ISSMS}args{$else}BoundsSQLWhere{$endif}[arg],tmpIsString);
+        if tmpIsString then
+          DoubleQuoteStr(tmp);
+        inc(arg);
+      end;
+      result := result+tmp+'):';
+      inc(i);
+      deb := i;
+    end else
+      inc(i);
+  end;
+  result := result+copy(SQLWhere,deb,i-deb);
+end;
+{$endif}
 
 function DateTimeToTTimeLog(Value: TDateTime): TTimeLog;
 var HH,MM,SS,MS,Y,M,D: word;
@@ -1418,52 +1459,57 @@ end;
 function ToDigit2(value: integer): string;
 begin
   if value<=0 then
-    result := '00' else
-  if value>99 then
-    result := '99' else
+    result := '00' 
+  else if value>99 then
+    result := '99' 
+  else
     result := chr(48+value div 10)+chr(48+value mod 10);
 end;
 
 function ToDigit4(value: integer): string;
 begin
   if value<=0 then
-    result := '0000' else
-  if value>9999 then
-    result := '9999' else
+    result := '0000' 
+  else if value>9999 then
+    result := '9999' 
+  else
     result := ToDigit2(value div 100)+ToDigit2(value mod 100);
 end;
 
-function UrlEncode(const aValue: string): string; overload;
-{$ifdef ISSMS} inline;
-begin // see http://www.w3schools.com/jsref/jsref_encodeuricomponent.asp
-  result := encodeURIComponent(aValue);
-end;
-{$else}
+function UrlEncode(const aValue: string): string; overload; {$ifdef ISSMS} inline; {$endif ISSMS}
+{$ifndef ISSMS}
 const
   HexChars: array[0..15] of string = (
     '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F');
 var i,c: integer;
-    utf8: TUTF8Buffer;
-begin
-  result := '';
+    utf8: TUTF8Buffer; 
+{$endif}
+begin 
+  {$ifdef ISSMS} 
+  // see http://www.w3schools.com/jsref/jsref_encodeuricomponent.asp
+  result := encodeURIComponent(aValue);
+  {$else}
+   result := '';
   {$ifdef NEXTGEN}
   utf8 := TEncoding.UTF8.GetBytes(aValue);
-  for i := 0 to high(utf8) do begin
-  {$else}
+  for i := 0 to high(utf8) do
+  {$else NEXTGEN}
   utf8 := UTF8Encode(aValue);
-  for i := 1 to length(utf8) do begin
-  {$endif}
+  for i := 1 to length(utf8) do
+  {$endif NEXTGEN} 
+  begin
     c := ord(utf8[i]);
     case c of
-    ord('0')..ord('9'),ord('a')..ord('z'),ord('A')..ord('Z'),
-    ord('_'),ord('-'),ord('.'),ord('~'):
-              AppendChar(result,char(c));
-    ord(' '): AppendChar(result,'+');
-    else result := result+'%'+HexChars[c shr 4]+HexChars[c and $F];
+      ord('0')..ord('9'),ord('a')..ord('z'),ord('A')..ord('Z'),
+      ord('_'),ord('-'),ord('.'),ord('~'):
+                AppendChar(result,char(c));
+      ord(' '): AppendChar(result,'+');
+    else
+      result := result+'%'+HexChars[c shr 4]+HexChars[c and $F];
     end; // see rfc3986 2.3. Unreserved Characters
   end;
+  {$endif}
 end;
-{$endif}
 
 function UrlEncode(const aNameValueParameters: array of const): string; overload;
 var n,a: integer;
@@ -1481,24 +1527,31 @@ begin
     @temp=@aNameValueParameters;
   end;
   n := temp.length;
-  if n>1 then begin
-    for a := 0 to (n-1)shr 1 do begin
+  if n>1 then
+  begin
+    for a := 0 to (n-1)shr 1 do
+    begin
       name := temp[a*2];
       value := temp[a*2+1];
+      result := result+'&'+name+'='+UrlEncode(value);
+    end;
+  end;
 {$else}
   n := high(aNameValueParameters);
-  if n>0 then begin
-    for a := 0 to n div 2 do begin
+  if n>0 then
+  begin
+    for a := 0 to n div 2 do
+    begin
       name := VarRecToValue(aNameValueParameters[a*2],wasString);
       for i := 1 to length(name) do
         if not (ord(name[i]) in [ord('a')..ord('z'),ord('A')..ord('Z')]) then
           raise ERestException.CreateFmt(
             'UrlEncode() expect alphabetic names, not "%s"',[name]);
       value := VarRecToValue(aNameValueParameters[a*2+1],wasString);
-{$endif}
       result := result+'&'+name+'='+UrlEncode(value);
     end;
   end;
+{$endif}
   if result<>'' then
     result[1] := '?';
 end;
@@ -1509,7 +1562,8 @@ begin
   ai := Pos(upcase(a),'0123456789ABCDEF')-1;
   bi := Pos(upcase(b),'0123456789ABCDEF')-1;
   if (ai<0) or (bi<0) then
-    result := ord('?') else
+    result := ord('?') 
+  else
     result := ai shl 4+bi;
 end;
 
@@ -1526,7 +1580,8 @@ begin
   len := length(aValue);
   n := 0;
   SetLength(utf8,len);
-  while i<=length(aValue) do begin
+  while i<=length(aValue) do 
+  begin
     {$ifndef NEXTGEN} // TUTF8Buffer = UTF8String is [1-based]
     inc(n);
     {$endif}
@@ -1534,14 +1589,16 @@ begin
     case c of
     ord('+'):
       utf8[n] := AnsiChar(' ');
-    ord('%'): begin
+    ord('%'): 
+    begin
       if i+2<=len then
         utf8[n] := AnsiChar(HexDecode(aValue[i+1],aValue[i+2])) else
         utf8[n] := AnsiChar('?');
       inc(i,2);
     end;
     else if c>127 then
-      utf8[n] := AnsiChar('?') else
+      utf8[n] := AnsiChar('?') 
+    else
       utf8[n] := AnsiChar(c);
     end;
     inc(i);
@@ -1576,17 +1633,20 @@ begin
   prop := new TSQLModelInfoPropInfo;
   prop.Name := 'RowID'; // first Field is RowID
   Props.Add(prop);
-  for name in PropNames do begin
+  for name in PropNames do 
+  begin
     prop := new TSQLModelInfoPropInfo;
     prop.Name := name;
     Props.Add(prop);
   end;
   PropCache := new JObject;
-  for p := 0 to high(Props) do begin
+  for p := 0 to high(Props) do 
+  begin
     prop := Props[p];
     prop.FieldIndex := TSQLFieldBit(p);
     if (p>0) and (p<=length(PropKinds)) then
-      prop.Kind := PropKinds[p-1] else
+      prop.Kind := PropKinds[p-1] 
+    else
       prop.Kind := sftUnspecified;
     PropCache[uppercase(prop.Name)] := prop;
   end;
@@ -1612,9 +1672,11 @@ var
 class function TSQLRecord.GetRTTI: TRTTIPropInfos;
 begin // use RTTI_Cache as global dictionary of all TSQLRecord's RTTI
   var res = RTTI_Cache[ClassName];
-  if VarIsValidRef(res) then asm
+  if VarIsValidRef(res) then 
+  asm
     @result=@res;
-  end else begin
+  end else 
+  begin
     result := ComputeRTTI;
     RTTI_Cache[ClassName] := result;
   end;
@@ -1629,14 +1691,14 @@ end;
 procedure TSQLRecord.SetProperty(FieldIndex: integer; const Value: variant);
 begin
   case FieldIndex of
-  0: fID := Value;
+    0: fID := Value;
   end;
 end;
 
 function TSQLRecord.GetProperty(FieldIndex: integer): variant;
 begin
   case FieldIndex of
-  0: result := fID;
+    0: result := fID;
   end;
 end;
 
@@ -1680,21 +1742,24 @@ end;
 function TSQLRecord.RecordClass: TSQLRecordClass;
 begin
   if self=nil then
-    result := nil else
+    result := nil 
+  else
     result := TSQLRecordClass(ClassType);
 end;
 
 function TSQLRecord.FillOne: boolean;
 begin
   if (self=nil) or (fFill=nil) then
-    result := false else
+    result := false 
+  else
     result := fFill.FillOne(self);
 end;
 
 function TSQLRecord.FillRewind: boolean;
 begin
   if (self=nil) or (fFill=nil) then
-    result := false else
+    result := false 
+  else
     result := fFill.FillOne(self,true);
 end;
 
@@ -1712,7 +1777,8 @@ begin
   rtti := GetRTTI;
   for i := 0 to high(Names) do
     if Find(rtti.PropCache,Names[i],info) then
-      SetProperty(info.FieldIndex,Values[i+ValuesStartIndex]) else
+      SetProperty(info.FieldIndex,Values[i+ValuesStartIndex]) 
+    else
       exit;
   result := true;
 end;
@@ -1728,14 +1794,16 @@ var doc: TJSONVariantData;
 begin
   if (self=nil) or (aJSON='') then
     result := false else
-  if StartWithPropName(aJSON,'{"fieldCount":') then begin
+  if StartWithPropName(aJSON,'{"fieldCount":') then 
+  begin
     table := TSQLTableJSON.Create(aJSON); // non expanded format
     try
       result := table.FillOne(self);
     finally
       table.Free;
     end;
-  end else begin // expanded format
+  end else 
+  begin // expanded format
     {$ifdef ISSMS}
     doc := TJSONVariantData.Create(aJSON);
     result := FromNamesValues(doc.Names,doc.Values,0);
@@ -1764,7 +1832,9 @@ function TSQLRecord.ToJSON(aModel: TSQLModel; aFieldNames: string=''): String;
 var nfo: TSQLModelInfo;
 begin
   if self=nil then
-    result := 'null' else begin
+    result := 'null' 
+  else 
+  begin
     nfo := aModel.InfoExisting(RecordClass);
     result := nfo.ToJSON(self,nfo.FieldNamesToFieldBits(aFieldNames,false));
   end;
@@ -1773,7 +1843,9 @@ end;
 function TSQLRecord.ToVariant: variant;
 begin
   if self=nil then
-    result := null else begin
+    result := null 
+  else 
+  begin
     {$ifdef ISSMS}
     result := new JObject;
     var rtti := GetRTTI;
@@ -1794,29 +1866,31 @@ constructor TSQLTableJSON.Create(const aJSON: string);
 begin
   var dat = JSON.Parse(aJSON);
   case VariantType(dat) of
-  jvObject: begin
-    // non expanded format: {"fieldCount":2,"values":["ID","Int",1,0,2,0,3,...]
-    fFieldCount := dat.fieldCount;
-    var values := dat.values;
-    if VariantType(values)<>jvArray then
-      exit;
-    asm
-      @fValues=@values;
+  jvObject: 
+    begin
+      // non expanded format: {"fieldCount":2,"values":["ID","Int",1,0,2,0,3,...]
+      fFieldCount := dat.fieldCount;
+      var values := dat.values;
+      if VariantType(values)<>jvArray then
+        exit;
+      asm
+        @fValues=@values;
+      end;
+      var n = fValues.Count;
+      if (n<fFieldCount) or (n mod fFieldCount<>0) then
+        exit;
+      for var i := 0 to fFieldCount-1 do
+        fFieldNames.Add(string(fValues[i]));
+      fRowCount := (n div fFieldCount)-1;
     end;
-    var n = fValues.Count;
-    if (n<fFieldCount) or (n mod fFieldCount<>0) then
-      exit;
-    for var i := 0 to fFieldCount-1 do
-      fFieldNames.Add(string(fValues[i]));
-    fRowCount := (n div fFieldCount)-1;
-  end;
-  jvArray: begin
-    // expanded format: [{"ID":1,"Int":0},{"ID":2,"Int":0},{"ID":3,...]
-    asm
-      @fValues=@dat;
+    jvArray: 
+    begin
+      // expanded format: [{"ID":1,"Int":0},{"ID":2,"Int":0},{"ID":3,...]
+      asm
+        @fValues=@dat;
+      end;
+      fRowCount := fValues.Count;
     end;
-    fRowCount := fValues.Count;
-  end;
   end;
   if fRowCount>0 then
     fCurrentRow := 1;
@@ -1828,13 +1902,15 @@ begin
   if (Value=nil) or (fRowCount=0) then
     exit;
   if SeekFirst then
-    fCurrentRow := 1 else
-    if fCurrentRow>fRowCount then
+    fCurrentRow := 1 
+  else if fCurrentRow>fRowCount then
       exit;
-  if fFieldNames.Count>0 then begin
+  if fFieldNames.Count>0 then 
+  begin
     // non expanded format
     result := Value.FromNamesValues(fFieldNames,fValues,fCurrentRow*fFieldCount);
-  end else begin
+  end else 
+  begin
     // expanded format
     var doc := TJSONVariantData.CreateFrom(fValues[fCurrentRow-1]);
     result := Value.FromNamesValues(doc.Names,doc.Values,0);
@@ -1871,15 +1947,15 @@ begin
   case RTTI^.PropType^.Kind of
     tkRecord:  Kind := sftRecord;
     tkVariant: Kind := sftVariant;
-  else
-    if TypeName='TByteDynArray' then
-      Kind := sftBlob else
-    if TypeName='TDateTime' then
-      Kind := sftDateTime else
-    if TypeName='TCreateTime' then
-      Kind := sftCreateTime else
-    if TypeName='TModTime' then
-      Kind := sftModTime;
+    else
+      if TypeName='TByteDynArray' then
+        Kind := sftBlob 
+      else if TypeName='TDateTime' then
+        Kind := sftDateTime 
+      else if TypeName='TCreateTime' then
+        Kind := sftCreateTime 
+      else if TypeName='TModTime' then
+        Kind := sftModTime;
   end;
 end;
 
@@ -1897,7 +1973,8 @@ begin
   if (Value=nil) or not HasTimeFields then
     exit;
   if AndCreate then
-    fields := ModAndCreateTimeFields else
+    fields := ModAndCreateTimeFields 
+  else
     fields := ModTimeFields;
   TimeStamp := aClient.ServerTimeStamp;
   for f := 0 to length(Prop)-1 do
@@ -1912,12 +1989,16 @@ end;
 function GetDisplayNameFromClass(C: TClass): string;
 begin
   if C=nil then
-    result := '' else begin
+    result := '' 
+  else 
+  begin
     result := C.ClassName;
     if IdemPropName(copy(result,1,4),'TSQL') then
       if IdemPropName(copy(result,5,6),'Record') then
-        delete(result,1,10) else
-        delete(result,1,4) else
+        delete(result,1,10) 
+      else
+        delete(result,1,4) 
+    else
       if result[1]='T' then
         delete(result,1,1);
   end;
@@ -1942,14 +2023,17 @@ begin
   {$else}
   GetPropsInfo(Table.ClassInfo,Names,List);
   SetLength(Prop,length(List));
-  for f := 0 to high(List) do begin
+  for f := 0 to high(List) do 
+  begin
     Prop[f] := TSQLModelInfoPropInfo.CreateFrom(List[f]);
     if f=0 then
-      Prop[f].Name := 'RowID' else
+      Prop[f].Name := 'RowID' 
+    else
       Prop[f].Name := Names[f];
   end;
   {$endif}
-  for f := 0 to TSQLFieldBit(high(Prop)) do begin
+  for f := 0 to TSQLFieldBit(high(Prop)) do 
+  begin
     include(AllFields,f);
     Kind := Prop[ord(f)].Kind;
     include(HasKind,Kind);
@@ -2006,12 +2090,16 @@ var i: integer;
     field: string;
 begin
   if FieldNames='' then
-    result := SimpleFields else
+    result := SimpleFields 
+  else
   if FieldNames='*' then
-    result := AllFields else begin
+    result := AllFields 
+  else 
+  begin
     result := NO_SQLFIELDBITS;
     i := 1;
-    while GetNextCSV(FieldNames,i,field,',',true) do begin
+    while GetNextCSV(FieldNames,i,field,',',true) do 
+    begin
       {$ifdef ISSMS}
       var Info: TSQLModelInfoPropInfo;
       if Find(PropCache,field,info) then
@@ -2020,7 +2108,8 @@ begin
       if IsRowID(field) then
         Include(result,ID_SQLFIELD) else
         for f := 1 to length(Prop)-1 do
-          if IdemPropName(field,Prop[ord(f)].Name) then begin
+          if IdemPropName(field,Prop[ord(f)].Name) then 
+          begin
             include(result,f);
             break;
           end;
@@ -2062,7 +2151,8 @@ begin
       result := result+'"'+Prop[ord(f)].Name+'":'+
         ValueToJSON(GetInstanceProp(Value,Prop[f].RTTI))+',';
   if result='{' then
-    result := 'null' else
+    result := 'null' 
+  else
     result[Length(Result)] := '}';
 {$endif}
 end;
@@ -2084,7 +2174,8 @@ var Fields: TSQLFieldBits;
 begin
   fields := FieldNamesToFieldBits(FieldNames,true);
   if ForceID then
-    include(fields,ID_SQLFIELD) else
+    include(fields,ID_SQLFIELD) 
+  else
     exclude(fields,ID_SQLFIELD);
   ComputeFieldsBeforeWrite(Client,Value,false);
   result := ToJSON(Value,fields);
@@ -2124,7 +2215,8 @@ begin
   {$endif}
   if aRoot<>'' then
     if aRoot[length(aRoot)]='/' then
-      fRoot := copy(aRoot,1,Length(aRoot)-1) else
+      fRoot := copy(aRoot,1,Length(aRoot)-1) 
+    else
       fRoot := aRoot;
 end;
 
@@ -2133,6 +2225,15 @@ begin
   if self<>nil then
     for result := 0 to High(fInfo) do
       if fInfo[result].Table=aTable then
+        exit;
+  result := -1;
+end;
+
+function TSQLModel.GetTableIndexInherits(aTable: TSQLRecordClass): integer;
+begin
+  if self<>nil then
+    for result := 0 to High(fInfo) do
+      if fInfo[result].Table.InheritsFrom(aTable) then
         exit;
   result := -1;
 end;
@@ -2156,7 +2257,7 @@ end;
 
 function TSQLModel.GetTableIndex(const aTableName: string): integer;
 begin
-  if self<>nil then                                
+  if self<>nil then
     for result := 0 to High(fInfo) do
       if IdemPropName(fInfo[result].Name,aTableName) then
         exit;
@@ -2166,7 +2267,8 @@ end;
 function TSQLModel.GetTableIndexExisting(aTable: TSQLRecordClass): integer;
 begin
   if self=nil then
-    result := -1 else
+    result := -1
+  else
     result := GetTableIndex(aTable);
   if result<0 then
     raise ERestException.CreateFmt('%s should be part of the Model',
@@ -2206,7 +2308,8 @@ end;
 function TSQLRest.GetServerTimeStamp: TTimeLog;
 begin
   if fServerTimeStampOffset=0 then
-    result := 0 else
+    result := 0 
+  else
     result := DateTimeToTTimeLog(Now+fServerTimeStampOffset);
 end;
 
@@ -2214,7 +2317,9 @@ function TSQLRest.SetServerTimeStamp(const ServerResponse: string): boolean;
 var TimeStamp: Int64;
 begin
   if not TryStrToInt64(ServerResponse,TimeStamp) then
-    result := false else begin
+    result := false 
+  else 
+  begin
     fServerTimeStampOffset := TTimeLogToDateTime(TimeStamp)-Now;
     if fServerTimeStampOffset=0 then
       fServerTimeStampOffset := 0.000001; // ensure <> 0 (indicates error)
@@ -2239,12 +2344,13 @@ begin
   table := MultiFieldValues(Value.RecordClass,FieldNames,
     SQLWhere,BoundsSQLWhere,true);
   if table=nil then
-    result := false else
-    try
-      result := table.FillOne(Value);
-    finally
-      table.Free;
-    end;
+    result := false 
+  else
+  try
+    result := table.FillOne(Value);
+  finally
+    table.Free;
+  end;
 end;
 
 function TSQLRest.RetrieveList(Table: TSQLRecordClass; const FieldNames,
@@ -2257,18 +2363,18 @@ begin
   {$endif}
   rows := MultiFieldValues(Table,FieldNames,SQLWhere,BoundsSQLWhere);
   if rows<>nil then
-    try
-      repeat
-        rec := Table.Create;
-        if not rows.FillOne(rec) then begin
-          rec.Free;
-          break;
-        end;
-        result.Add(rec);
-      until false;
-    finally
-      rows.Free;
-    end;
+  try
+    repeat
+      rec := Table.Create;
+      if not rows.FillOne(rec) then begin
+        rec.Free;
+        break;
+      end;
+      result.Add(rec);
+    until false;
+  finally
+    rows.Free;
+  end;
 end;
 
 {$ifdef ISDELPHI2010}
@@ -2280,18 +2386,18 @@ begin
   result := TObjectList<T>.Create; // TObjectList<T> will free each T instance
   rows := MultiFieldValues(TSQLRecordClass(T),FieldNames,SQLWhere,BoundsSQLWhere);
   if rows<>nil then
-    try
-      repeat
-        rec := TSQLRecordClass(T).Create;
-        if not rows.FillOne(rec) then begin
-          rec.Free;
-          break;
-        end;
-        result.Add(rec);
-      until false;
-    finally
-      rows.Free;
-    end;
+  try
+    repeat
+      rec := TSQLRecordClass(T).Create;
+      if not rows.FillOne(rec) then begin
+        rec.Free;
+        break;
+      end;
+      result.Add(rec);
+    until false;
+  finally
+    rows.Free;
+  end;
 end;
 {$endif}
 
@@ -2312,7 +2418,8 @@ function TSQLRest.Update(Value: TSQLRecord; FieldNames: string): boolean;
 var tableIndex: Integer;
     json: string;
 begin
-  if (Value=nil) or (Value.ID<=0) then begin
+  if (Value=nil) or (Value.ID<=0) then 
+  begin
     result := false;
     exit;
   end;
@@ -2326,7 +2433,8 @@ end;
 function TSQLRest.BatchStart(aTable: TSQLRecordClass;
   AutomaticTransactionPerRow: cardinal; BatchOptions: TSQLRestBatchOptions): boolean;
 begin
-  if (fBatchCount<>0) or (fBatch<>'') or (AutomaticTransactionPerRow<=0) then begin
+  if (fBatchCount<>0) or (fBatch<>'') or (AutomaticTransactionPerRow<=0) then 
+  begin
     result := false; // already opened BATCH sequence
     exit;
   end;
@@ -2347,9 +2455,11 @@ begin
   Info := Model.InfoExisting(Table);
   if fBatchTable<>nil then
     if fBatchTable<>Table then
-      exit else 
-      fBatch := fBatch+CMD+'",' else
-      fBatch := fBatch+CMD+'@'+Info.Name+'",';
+      exit 
+    else 
+      fBatch := fBatch+CMD+'",' 
+  else
+    fBatch := fBatch+CMD+'@'+Info.Name+'",';
   result := fBatchCount;
   inc(fBatchCount);
 end;
@@ -2361,7 +2471,8 @@ begin
   result := InternalBatch(Value.RecordClass,'"POST',info);
   if result>=0 then
     if not SendData then
-      fBatch := fBatch+'{},' else
+      fBatch := fBatch+'{},' 
+    else
       fBatch := fBatch+info.ToJSONAdd(self,Value,ForceID,FieldNames)+',';
 end;
 
@@ -2369,7 +2480,9 @@ function TSQLRest.BatchUpdate(Value: TSQLRecord; FieldNames: string): integer;
 var info: TSQLModelInfo;
 begin
   if (Value=nil) or (Value.ID<=0) then
-    result := -1 else begin
+    result := -1 
+  else 
+  begin
     result := InternalBatch(Value.RecordClass,'"PUT',info);
     if result>=0 then
       fBatch := fBatch+info.ToJSONUpdate(self,Value,FieldNames,true)+',';
@@ -2380,7 +2493,9 @@ function TSQLRest.BatchDelete(Table: TSQLRecordClass; ID: TID): integer;
 var info: TSQLModelInfo;
 begin
   if ID<=0 then
-    result := -1 else begin
+    result := -1 
+  else 
+  begin
     result := InternalBatch(Table,'"DELETE',info);
     if result>=0 then
       fBatch := fBatch+IntToStr(ID)+',';
@@ -2400,14 +2515,16 @@ end;
 function TSQLRest.BatchCount: integer;
 begin
   if self=nil then
-    result := 0 else
+    result := 0 
+  else
     result := fBatchCount;
 end;
 
 function TSQLRest.BatchSend(var Results: TIDDynArray): integer;
 begin
   if (self=nil) or (fBatch='') then
-    result := HTTP_BADREQUEST else
+    result := HTTP_BADREQUEST 
+  else
   try
     if BatchCount>0 then begin
       fBatch[length(fBatch)] := ']';
@@ -2482,7 +2599,8 @@ end;
 
 procedure TSQLRest.Log(E: Exception);
 begin
-  if Assigned(self) and Assigned(fOnLog) and (sllException in fLogLevel) then begin
+  if Assigned(self) and Assigned(fOnLog) and (sllException in fLogLevel) then 
+  begin
    {$ifdef ISSMS}
    var msg: string;
    asm @msg = new Error().stack; end;
@@ -2503,7 +2621,8 @@ begin
   LogClose;
   fLogClient := TSQLRestClientHTTP.Create(aServer,aPort,TSQLModel.Create([],aRoot),true);
   fLogClient.CallBackGet('TimeStamp',[],Call,nil); // synchronous connection
-  if Call.OutStatus=HTTP_SUCCESS then begin
+  if Call.OutStatus=HTTP_SUCCESS then 
+  begin
     fLogLevel := LogLevel;
     OnLog := LogToRemoteServerText;
     asm @userAgent = navigator.userAgent; end;
@@ -2533,7 +2652,8 @@ end;
 
 destructor TSQLRestLogClientThread.Destroy;
 begin
-  if fOwner.fLogClient=Self then begin
+  if fOwner.fLogClient=Self then 
+  begin
     fOwner.fLogClient := nil;
     fOwner.fOnlog := nil;
   end;
@@ -2549,7 +2669,8 @@ begin
     exit; // avoid GPF
   fLock.Enter;
   if fPending='' then
-    fPending := Text else
+    fPending := Text 
+  else
     fPending := fPending+#13#10+Text;
   fLock.Leave;
 end;
@@ -2566,7 +2687,8 @@ begin
     exeName := 'non Windows platform';
   fOwner.Log(sllClient,'Remote Cross-Platform Client %s Connected from %s',
     [ClassName,exeName]);
-  while not Terminated do begin
+  while not Terminated do 
+  begin
     sleep(10);
     if Terminated then
       break;
@@ -2597,8 +2719,10 @@ begin
     FN := IncludeTrailingPathDelimiter(aFolderName);
   if aFileName<>'' then
     if ExtractFileExt(aFileName)='' then
-      FN := FN+aFileName+'.log' else
-      FN := FN+aFileName else
+      FN := FN+aFileName+'.log' 
+    else
+      FN := FN+aFileName 
+  else
     FN := FN+FormatDateTime('yyyymmddhhnnss',Now)+'.log';
   try
     AssignFile(fLogFile,FN);
@@ -2629,18 +2753,19 @@ begin
   fLogLevel := [];
   fOnLog := nil;
   {$ifdef ISSMS}
-  if fLogClient<>nil then begin
+  if fLogClient<>nil then 
+  begin
     fLogClient.CallAsynchText; // send NOW any pending log
     fLogClient.Free;
     fLogClient := nil;
   end;
   {$else}
   if fLogFileBuffer<>nil then
-    try
-      system.Close(fLogFile);
-    finally
-      Finalize(fLogFileBuffer);
-    end;
+  try
+    system.Close(fLogFile);
+  finally
+    Finalize(fLogFileBuffer);
+  end;
   FreeAndNil(fLogClient);
   {$endif}
 end;
@@ -2686,7 +2811,8 @@ begin
   // so we expect reUrlEncodedSQL to be defined in AllowRemoteExecute
   Call.Init(Model.Root+UrlEncode(['sql',sql]),'GET','');
   URI(Call);
-  if Call.OutStatus=HTTP_SUCCESS then begin
+  if Call.OutStatus=HTTP_SUCCESS then 
+  begin
     json := Call.OutBodyUtf8;
     result := TSQLTableJSON.Create(json);
     result.fInternalState := fInternalState;
@@ -2703,11 +2829,13 @@ begin
   tableIndex := Model.GetTableIndexExisting(Value.RecordClass);
   Call.Url := getURIID(tableIndex,aID);
   if ForUpdate then
-     Call.Verb := 'LOCK' else
+     Call.Verb := 'LOCK' 
+  else
      Call.Verb := 'GET';
   URI(Call);
   result := Call.OutStatus=HTTP_SUCCESS;
-  if result then begin
+  if result then
+  begin
     json := Call.OutBodyUtf8;
     Value.FromJSON(json);
     Value.fInternalState := fInternalState;
@@ -2752,7 +2880,8 @@ begin
   result := '';
   i := 1;
   while GetNextCSV(Headers,i,line,#10) do
-    if StartWithPropName(line,Name) then begin
+    if StartWithPropName(line,Name) then
+    begin
       delete(line,1,length(Name));
       result := trim(line); // will work if EOL is CRLF or LF only
       exit;
@@ -2792,12 +2921,14 @@ begin
   if self=nil then
     exit;
   Call.UrlWithoutSignature := Call.Url;
-  if (fAuthentication<>nil) and (fAuthentication.SessionID<>0) then begin
+  if (fAuthentication<>nil) and (fAuthentication.SessionID<>0) then
+  begin
     if Pos('?',Call.Url)=0 then
-      sign := '?session_signature=' else
+      sign := '?session_signature='
+    else
       sign := '&session_signature=';
     Call.Url := Call.Url+sign+
-      fAuthentication.ClientSessionComputeSignature(self,Call.Url);
+      fAuthentication.ClientSessionComputeSignature(Call.Url);
   end;
   InternalURI(Call);
   InternalStateUpdate(Call);
@@ -2811,7 +2942,8 @@ begin
     exit; // asynchronous call do not have a result yet
   {$endif}
   if Call.OutStatus<>HTTP_SUCCESS then
-    Log(sllError,'Service %s returned %s',[aMethodName,Call.OutBodyUtf8]) else
+    Log(sllError,'Service %s returned %s',[aMethodName,Call.OutBodyUtf8])
+  else
     Log(sllServiceReturn,'%s success',[aMethodName]);
 end;
 
@@ -2843,17 +2975,20 @@ begin
   Call.Init(getURICallBack('Batch',Table,0),'POST',Data);
   URI(Call);
   result := Call.OutStatus;
-  if result<>HTTP_SUCCESS then begin
+  if result<>HTTP_SUCCESS then 
+  begin
     Log(sllError,'BATCH error');
     exit; // transmission or internal server error
   end;
   Log(sllServiceReturn,'BATCH success in %s',[FormatDateTime('nn:ss:zzz',Now-start)]);
   {$ifdef ISSMS}
   Results.Clear;
-  if Call.OutBody='["OK"]' then begin
+  if Call.OutBody='["OK"]' then 
+  begin
     for i := 0 to fBatchCount-1 do
       Results.Add(HTTP_SUCCESS);
-  end else begin
+  end else 
+  begin
     doc := JSON.Parse(Call.OutBody);
     if (VariantType(doc)=jvArray) and (doc.length=fBatchCount) then
       for i := 0 to fBatchCount-1 do
@@ -2862,16 +2997,29 @@ begin
   {$else}
   SetLength(Results,fBatchCount);
   HttpBodyToText(Call.OutBody,jsonres);
-  if jsonres='["OK"]' then begin
+  if jsonres='["OK"]' then 
+  begin
     for i := 0 to fBatchCount-1 do
       Results[i] := HTTP_SUCCESS;
-  end else begin
+  end else 
+  begin
     doc.Init(jsonres);
     if (doc.Kind=jvArray) and (doc.Count=fBatchCount) then
       for i := 0 to fBatchCount-1 do
         Results[i] := {$ifdef FPC}Int64{$endif}(doc.Values[i]);
   end;
   {$endif}
+end;
+
+function TSQLRestClientURI.CallBackGetResponse(const aMethodName: string;
+  const aNameValueParameters: array of const): string;
+var
+  Call: TSQLRestURIParams;
+begin
+  CallBackGet(aMethodName,aNameValueParameters,Call, nil, 0);
+  if Call.OutStatus<>HTTP_SUCCESS then
+    exit;
+  HttpBodyToText(Call.OutBody, result);
 end;
 
 /// marshall {result:...,id:...} and {result:...} body answers
@@ -2892,7 +3040,7 @@ begin
   if VarIsValidRef(doc.id) then
     outID := doc.id;
   {$else}
-  HttpBodyToText(aCall.OutBody,jsonres);
+  HttpBodyToText(aCall.OutBody, jsonres);
   doc.Init(jsonres);
   result := doc.ValueCopy['result']; // Value[] -> varByRef
   outID := doc.Value['id'];
@@ -2942,7 +3090,8 @@ begin
   inc(fAsynchCount);
   Call.OnSuccess :=
   lambda
-    if Call.XHR.readyState=rrsDone then begin
+    if Call.XHR.readyState=rrsDone then 
+    begin
       InternalStateUpdate(Call);
       if not assigned(onBeforeSuccess) then
         onSuccess(self) else
@@ -3008,8 +3157,10 @@ begin
     lambda
       if not assigned(onSuccess) then
         exit; // no result to handle
-      if aReturnsCustomAnswer then begin
-        if Call.OutStatus=HTTP_SUCCESS then begin
+      if aReturnsCustomAnswer then
+      begin
+        if Call.OutStatus=HTTP_SUCCESS then
+        begin
           var result: TVariantDynArray;
           result.Add(Call.OutBody);
           onSuccess(result);
@@ -3020,11 +3171,13 @@ begin
       end;
       var outID: integer;
       var result := CallGetResult(Call,outID); // from {result:...,id:...}
-      if VarIsValidRef(result) then begin
+      if VarIsValidRef(result) then
+      begin
          if (aCaller.fInstanceImplementation=sicClientDriven) and (outID<>0) then
            (aCaller as TServiceClientAbstractClientDriven).fClientID := IntToStr(outID);
         if aExpectedOutputParamsCount=0 then
-          onSuccess([]) else begin
+          onSuccess([])
+        else begin
           var res := TJSONVariantData.CreateFrom(result);
           if (res.Kind=jvArray) and (res.Count=aExpectedOutputParamsCount) then
             onSuccess(res.Values) else
@@ -3056,7 +3209,8 @@ end;
 begin
   // ForceServiceResultAsJSONObject not implemented yet
   CallRemoteServiceInternal(Call,aCaller,aMethodName,JSON.Stringify(variant(aInputParams)));
-  if aReturnsCustomAnswer then begin
+  if aReturnsCustomAnswer then
+  begin
     if Call.OutStatus<>HTTP_SUCCESS then
       RaiseError;
     result.Add(Call.OutBody);
@@ -3105,12 +3259,14 @@ begin
   for i := 0 to high(aInputParams) do
     params.AddValue(aInputParams[i]);
   CallRemoteServiceInternal(Call,aCaller,aMethodName,params.ToJSON);
-  if Call.OutStatus<>HTTP_SUCCESS then begin
+  if Call.OutStatus<>HTTP_SUCCESS then
+  begin
     HttpBodyToText(Call.OutBody,bodyerror);
     raise EServiceException.CreateFmt('Error calling %s.%s - returned status %d'#13#10'%s',
       [aCaller.fServiceName,aMethodName,Call.OutStatus,bodyerror]);
   end;
-  if aReturnsCustomAnswer then begin
+  if aReturnsCustomAnswer then
+  begin
     SetLength(res,1);
     res[0] := HttpBodyToVariant(Call.OutBody);
     exit;
@@ -3188,17 +3344,22 @@ begin
     SessionClose;
   if aAuthenticationClass=nil then
     exit;
-  fAuthentication := aAuthenticationClass.Create(aUserName,aPassword,aHashedPassword);
+  fAuthentication := aAuthenticationClass.Create(self,
+                                                aUserName,
+                                                aPassword,
+                                                aHashedPassword);
   try
-    aKey := fAuthentication.ClientComputeSessionKey(self);
+    aKey := fAuthentication.ClientComputeSessionKey;
     i := 1;
     GetNextCSV(aKey,i,aSessionID,'+');
-    if TryStrToInt(aSessionID,i) and (i>0) then begin
+    if TryStrToInt(aSessionID,i) and (i>0) then
+    begin
       fAuthentication.SetSessionID(i);
       Log(sllUserAuth,'Session %d created for "%s" with %s',
-        [i,aUserName,fAuthentication.ClassName]);
+        [i, aUserName, fAuthentication.ClassName]);
       result := true;
-    end else begin
+    end else
+    begin
       fAuthentication.Free;
       fAuthentication := nil;
     end;
@@ -3214,13 +3375,13 @@ procedure TSQLRestClientURI.SessionClose;
 var Call: TSQLRestURIParams;
 begin
   if (self<>nil) and (fAuthentication<>nil) then
-    try // notify Server to end of session
-      CallBackGet('Auth',['UserName',fAuthentication.User.LogonName,
-        'Session',fAuthentication.SessionID],Call,nil);
-    finally
-      fAuthentication.Free;
-      fAuthentication := nil;
-    end;
+  try // notify Server to end of session
+    CallBackGet('Auth',['UserName',fAuthentication.User.LogonName,
+      'Session',fAuthentication.SessionID],Call,nil);
+  finally
+    fAuthentication.Free;
+    fAuthentication := nil;
+  end;
 end;
 
 {$ifndef ISSMS}
@@ -3273,27 +3434,32 @@ var inType: string;
     retry: integer;
 begin
   inType := FindHeader(Call.InHead,'content-type: ');
-  if inType='' then begin
+  if inType='' then
+  begin
     if OnlyJSONRequests then
-      inType := JSON_CONTENT_TYPE else
+      inType := JSON_CONTENT_TYPE 
+    else
       inType := 'text/plain'; // avoid slow CORS preflighted requests
     Call.InHead := trim(Call.InHead+#13#10'content-type: '+inType);
   end;
   if fCustomHttpHeader<>'' then
     Call.InHead := trim(Call.InHead+fCustomHttpHeader);
-  for retry := 0 to 1 do begin
+  for retry := 0 to 1 do
+  begin
     if fConnection=nil then
       try
         fConnection := HttpConnectionClass.Create(fParameters);
         // TODO: handle SynLZ compression and SHA/AES encryption?
       except
-        on E: Exception do begin
+        on E: Exception do
+        begin
           Log(E);
           fConnection.Free;
           fConnection := nil;
         end;
       end;
-    if fConnection=nil then begin
+    if fConnection=nil then
+    begin
       Call.OutStatus := HTTP_NOTIMPLEMENTED;
       break;
     end;
@@ -3301,7 +3467,8 @@ begin
       fConnection.URI(Call,inType,fKeepAlive);
       break; // do not retry on transmission success, or asynchronous request
     except
-      on E: Exception do begin
+      on E: Exception do
+      begin
         Log(E);
         fConnection.Free;
         fConnection := nil;
@@ -3340,24 +3507,24 @@ end;
 procedure TSQLAuthUser.SetProperty(FieldIndex: integer; const Value: variant);
 begin
   case FieldIndex of
-  0: fID := Value;
-  1: fData := Value;
-  2: fGroup := Value;
-  3: fLogonName := Value;
-  4: fDisplayName := Value;
-  5: fPasswordHashHexa := Value;
+    0: fID := Value;
+    1: fData := Value;
+    2: fGroup := Value;
+    3: fLogonName := Value;
+    4: fDisplayName := Value;
+    5: fPasswordHashHexa := Value;
   end;
 end;
 
 function TSQLAuthUser.GetProperty(FieldIndex: integer): variant;
 begin
   case FieldIndex of
-  0: result := fID;
-  1: result := fData;
-  2: result := fGroup;
-  3: result := fLogonName;
-  4: result := fDisplayName;
-  5: result := fPasswordHashHexa;
+    0: result := fID;
+    1: result := fData;
+    2: result := fGroup;
+    3: result := fLogonName;
+    4: result := fDisplayName;
+    5: result := fPasswordHashHexa;
   end;
 end;
 
@@ -3370,7 +3537,8 @@ var buf: THttpBody;
 begin
   sha := TSHA256.Create;
   try
-    for a := 0 to high(Values) do begin
+    for a := 0 to high(Values) do
+    begin
       buf := TextToHttpBody(Values[a]);
       sha.Update(buf);
     end;
@@ -3388,13 +3556,21 @@ end;
 
 { TSQLRestServerAuthentication }
 
-constructor TSQLRestServerAuthentication.Create(const aUserName, aPassword: string;
+constructor TSQLRestServerAuthentication.Create(AClient : TSQLRestClientURI; const aUserName, aPassword: string;
   aHashedPassword: Boolean);
+var
+  i : Integer;
 begin
-  fUser := TSQLAuthUser.Create;
+  fClient := AClient;
+  i := fClient.Model.GetTableIndexInherits(TSQLAuthUser);
+  if i <> -1 then
+    fUser := fClient.Model.Info[i].Table.Create as TSQLAuthUser
+  else
+    fUser := TSQLAuthUser.Create;
   fUser.LogonName := aUserName;
   if aHashedPassword then
-    fUser.PasswordHashHexa := aPassword else
+    fUser.PasswordHashHexa := aPassword 
+  else
     fUser.PasswordPlain := aPassword;
 end;
 
@@ -3412,25 +3588,49 @@ end;
 
 { TSQLRestServerAuthenticationDefault }
 
-function TSQLRestServerAuthenticationDefault.ClientComputeSessionKey(
-  Sender: TSQLRestClientURI): string;
-var aServerNonce, aClientNonce, aPassHash: string;
+function TSQLRestServerAuthenticationDefault.ClientComputeSessionKey: string;
+var aServerNonce, 
+aClientNonce, 
+aPassHash: string;
+{$ifndef ISSMS}
+  doc: TJSONVariantData;
+  jsonres: string;
+{$endif}
 begin
   if fUser.LogonName='' then
     exit;
-  aServerNonce := Sender.CallBackGetResult('Auth',['UserName',User.LogonName],nil);
+  aServerNonce := fClient.CallBackGetResult('Auth',['UserName',fUser.LogonName],nil);
   if aServerNonce='' then
     exit;
   aClientNonce := SHA256Compute([Copy(NowToIso8601,1,16)]);
-  aPassHash := Sha256Compute([Sender.Model.Root,aServerNonce,aClientNonce,
-    User.LogonName,User.PasswordHashHexa]);
-  result := Sender.CallBackGetResult('Auth',['UserName',User.LogonName,
-    'Password',aPassHash,'ClientNonce',aClientNonce],nil);
-  fSessionPrivateKey := crc32ascii(crc32ascii(0,result),fUser.fPasswordHashHexa);
+  aPassHash := Sha256Compute([fClient.Model.Root, 
+                                  aServerNonce, 
+                                  aClientNonce,
+                                  fUser.LogonName, 
+                                  fUser.PasswordHashHexa]);
+
+  {$ifdef ISSMS}
+    ToDo!
+  {$else ISSMS}
+  jsonres := fClient.CallBackGetResponse('Auth',['UserName',User.LogonName,
+    'Password',aPassHash,'ClientNonce', aClientNonce]);
+  if jsonres = ''  then
+    Exit;
+  doc.Init(jsonres);
+  result := doc.ValueCopy['result']; 
+  if result = ''  then
+    Exit;
+  fSessionPrivateKey := crc32ascii(crc32ascii(0, result), fUser.fPasswordHashHexa); 
+  fUser.fID := doc.ValueCopy['logonid'];  
+  fUser.fLogonName := doc.ValueCopy['logonname']; 
+  fUser.fDisplayName := doc.ValueCopy['logondisplay'];  
+  fUser.fGroup := doc.ValueCopy['logongroup']; 
+  fSessionTimeOut := doc.ValueCopy['timeout']; 
+  fSessionServer := doc.ValueCopy['server']; 
+  {$endif ISSMS} 
 end;
 
-function TSQLRestServerAuthenticationDefault.ClientSessionComputeSignature(
-  Sender: TSQLRestClientURI; const url: string): string;
+function TSQLRestServerAuthenticationDefault.ClientSessionComputeSignature(const url: string): string;
 var nonce: string;
 begin
   nonce := LowerCase(IntToHex(trunc(Now*(24*60*60)),8));
@@ -3440,14 +3640,12 @@ end;
 
 { TSQLRestServerAuthenticationNone }
 
-function TSQLRestServerAuthenticationNone.ClientComputeSessionKey(
-  Sender: TSQLRestClientURI): string;
+function TSQLRestServerAuthenticationNone.ClientComputeSessionKey: string;
 begin
-  result := Sender.CallBackGetResult('Auth',['UserName',User.LogonName],nil);
+  result := fClient.CallBackGetResult('Auth',['UserName',User.LogonName],nil);
 end;
 
-function TSQLRestServerAuthenticationNone.ClientSessionComputeSignature(
-  Sender: TSQLRestClientURI; const url: string): string;
+function TSQLRestServerAuthenticationNone.ClientSessionComputeSignature(const url: string): string;
 begin
   result := fSessionIDHexa8;
 end;
@@ -3465,27 +3663,28 @@ end;
 procedure TSQLAuthGroup.SetProperty(FieldIndex: integer; const Value: variant);
 begin
   case FieldIndex of
-  0: fID := Value;
-  1: fIdent := Value;
-  2: fSessionTimeOut := Value;
-  3: fAccessRights := Value;
+    0: fID := Value;
+    1: fIdent := Value;
+    2: fSessionTimeOut := Value;
+    3: fAccessRights := Value;
   end;
 end;
 
 function TSQLAuthGroup.GetProperty(FieldIndex: integer): variant;
 begin
   case FieldIndex of
-  0: result := fID;
-  1: result := fIdent;
-  2: result := fSessionTimeOut;
-  3: result := fAccessRights;
+    0: result := fID;
+    1: result := fIdent;
+    2: result := fSessionTimeOut;
+    3: result := fAccessRights;
   end;
 end;
 
 
 function VariantToBlob(const Value: variant): TSQLRawBlob;
 begin
-  if TVariant.IsString(Value) then begin
+  if TVariant.IsString(Value) then 
+  begin
     var s: string := Value;
     if s='' then
       result := null else
@@ -3497,7 +3696,8 @@ end;
 function BlobToVariant(const Blob: TSQLRawBlob): variant;
 begin
   if TVariant.IsString(Blob) then
-    result := BrowserAPI.Window.btoa(Blob) else
+    result := BrowserAPI.Window.btoa(Blob) 
+  else
     result := null;
 end;
 
@@ -3533,7 +3733,8 @@ end;
 function VariantToBlob(const Value: variant): TSQLRawBlob;
 begin
   if VarIsStr(Value) then // avoid conversion error from null to string
-    Base64JSONStringToBytes(Value,result) else
+    Base64JSONStringToBytes(Value,result) 
+  else
     Finalize(result);
 end;
 
@@ -3552,11 +3753,11 @@ begin
     exit;
   S := string(Value);
   if S<>'' then
-    try
-      result := SysUtils.StringToGUID('{'+s+'}');
-    except
-      ; // ignore any conversion error and return void TGUID
-    end;
+  try
+    result := SysUtils.StringToGUID('{'+s+'}');
+  except
+    ; // ignore any conversion error and return void TGUID
+  end;
 end;
 
 function GUIDToVariant(const GUID: TGUID): variant;
@@ -3576,7 +3777,8 @@ var P: PCardinal;
     Len: cardinal;
 begin
   result := nil;
-  with TVarData(value) do begin
+  with TVarData(value) do 
+  begin
     if (VType<>varHttpBody) or (VAny=nil) then
       exit;
     P := VAny;
@@ -3600,7 +3802,8 @@ begin
   VarClear(result);
   Len := length(HttpBody);
   if Len>0 then
-  with TVarData(result) do begin
+  with TVarData(result) do 
+  begin
     VType := varHttpBody;
     VAny := nil;
     {$ifdef UNICODE}
@@ -3622,7 +3825,9 @@ function VariantToEnum(const Value: variant; const TextValues: array of string):
 {$ifdef ISSMS}
 begin
   if TVariant.IsNumber(Value) then
-    result := Value else begin
+    result := Value 
+  else 
+  begin
     result := TextValues.IndexOf(string(Value));
     if result>=0 then
       exit;
@@ -3630,7 +3835,9 @@ begin
 var str: string;
 begin
   if VarIsOrdinal(Value) then
-    result := Value else begin
+    result := Value 
+  else 
+  begin
     str := Value;
     if str<>'' then
       for result := 0 to high(TextValues) do
@@ -3665,12 +3872,14 @@ begin
   result := CallGetResult(Call,dummyID);
   {$ifdef ISSMS}
   if VariantType(result)=jvArray then
-    contract := result[0] else
+    contract := result[0] 
+  else
     contract := result.contract;  // if ResultAsJSONObject=true
   {$else}
   with JSONVariantDataSafe(result,jvArray)^ do // Count=0 if not jvArray
     if Count=1 then
-      contract := Values[0] else
+      contract := Values[0]
+    else
       contract := Value['contract']; // if ResultAsJSONObject=true
   {$endif}
   if contract<>fContractExpected then
@@ -3756,7 +3965,8 @@ class procedure TSQLRestRoutingREST.ClientSideInvoke(var uri: String;
   var sent: String);
 begin
   if clientDrivenID<>'' then
-    uri := uri+'.'+method+'/'+clientDrivenID else
+    uri := uri+'.'+method+'/'+clientDrivenID 
+  else
     uri := uri+'.'+method;
   sent := params; // we may also encode them within the URI
 end;
@@ -3769,7 +3979,8 @@ class procedure TSQLRestRoutingJSON_RPC.ClientSideInvoke(var uri: String;
 begin
   sent := '{"method":"'+method+'","params":'+params;
   if clientDrivenID='' then
-    sent := sent+'}' else
+    sent := sent+'}' 
+  else
     sent := sent+',"id":'+clientDrivenID+'}';
 end;
 

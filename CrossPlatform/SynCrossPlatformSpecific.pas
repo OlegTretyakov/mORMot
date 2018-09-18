@@ -725,7 +725,8 @@ begin
   InStr := TMemoryStream.Create;
   OutStr := TMemoryStream.Create;
   try
-    if Call.InBody<>nil then begin
+    if Call.InBody<>nil then
+    begin
       InStr.Write(Call.InBody[0],length(Call.InBody));
       InStr.Seek(0,soBeginning);
     end;
@@ -740,11 +741,13 @@ begin
       LResponse := fConnection.Delete(fURL+Call.Url)
     else
       raise Exception.CreateFmt('Indy does not know method %s',[Call.Verb]);
-    if LResponse <> nil then begin
+    if LResponse <> nil then
+    begin
       Call.OutStatus := LResponse.StatusCode;
       Call.OutHead := NetHeadersToText(LResponse.Headers);
       OutLen := OutStr.Size;
-      if OutLen>0 then begin
+      if OutLen>0 then
+      begin
         SetLength(Call.OutBody,OutLen);
         OutStr.Seek(0,soBeginning);
         OutStr.Read(Call.OutBody[0],OutLen);
