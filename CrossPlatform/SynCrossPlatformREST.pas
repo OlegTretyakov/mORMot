@@ -1361,8 +1361,7 @@ begin
         tmp := 'null' 
       else
       begin
-        tmp := VarRecToValue(
-          {$ifdef ISSMS}args{$else}BoundsSQLWhere{$endif}[arg],tmpIsString);
+        tmp := VarRecToValue(args[arg],tmpIsString);
         if tmpIsString then
           DoubleQuoteStr(tmp);
         inc(arg);
@@ -1375,7 +1374,7 @@ begin
   end;
   result := result+copy(SQLWhere,deb,i-deb);
 end;
-{$else}
+{$else ISSMS}
   maxArgs := high(BoundsSQLWhere);
   result := '';
   arg := 0;
@@ -1391,8 +1390,7 @@ end;
         tmp := 'null' 
       else
       begin
-        tmp := VarRecToValue(
-          {$ifdef ISSMS}args{$else}BoundsSQLWhere{$endif}[arg],tmpIsString);
+        tmp := VarRecToValue(BoundsSQLWhere[arg],tmpIsString);
         if tmpIsString then
           DoubleQuoteStr(tmp);
         inc(arg);
@@ -1405,7 +1403,7 @@ end;
   end;
   result := result+copy(SQLWhere,deb,i-deb);
 end;
-{$endif}
+{$endif ISSMS}
 
 function DateTimeToTTimeLog(Value: TDateTime): TTimeLog;
 var HH,MM,SS,MS,Y,M,D: word;
@@ -1417,10 +1415,10 @@ begin
   DecodeDate(Value,Y,M,D);
   {$ifdef ISSMS} // JavaScript truncates to 32 bit binary
   result := SS+MM*$40+(HH+D*$20+M*$400+Y*$4000-$420)*$1000;
-  {$else}
+  {$else ISSMS}
   V := HH+D shl 5+M shl 10+Y shl 14-(1 shl 5+1 shl 10);
   result := SS+MM shl 6+V shl 12;
-  {$endif}
+  {$endif ISSMS}
 end;
 
 function TTimeLogToDateTime(Value: TTimeLog): TDateTime;
@@ -1429,9 +1427,9 @@ var Y: cardinal;
 begin
   {$ifdef ISSMS} // JavaScript truncates to 32 bit binary
   Y := (Value div $4000000) and 4095;
-  {$else}
+  {$else ISSMS}
   Y := (Value shr (6+6+5+5+4)) and 4095;
-  {$endif}
+  {$endif ISSMS}
   if (Y=0) or not TryEncodeDate(Y,1+(Value shr (6+6+5+5)) and 15,
        1+(Value shr (6+6+5)) and 31,result) then
     result := 0;
@@ -1483,12 +1481,12 @@ const
     '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F');
 var i,c: integer;
     utf8: TUTF8Buffer; 
-{$endif}
+{$endif ISSMS}
 begin 
   {$ifdef ISSMS} 
   // see http://www.w3schools.com/jsref/jsref_encodeuricomponent.asp
   result := encodeURIComponent(aValue);
-  {$else}
+  {$else ISSMS}
    result := '';
   {$ifdef NEXTGEN}
   utf8 := TEncoding.UTF8.GetBytes(aValue);
@@ -1508,7 +1506,7 @@ begin
       result := result+'%'+HexChars[c shr 4]+HexChars[c and $F];
     end; // see rfc3986 2.3. Unreserved Characters
   end;
-  {$endif}
+  {$endif ISSMS}
 end;
 
 function UrlEncode(const aNameValueParameters: array of const): string; overload;
@@ -1516,10 +1514,10 @@ var n,a: integer;
     name,value: string;
     {$ifdef ISSMS}
     temp: variant;
-    {$else}
+    {$else ISSMS}
     wasString: Boolean;
     i: integer;
-    {$endif}
+    {$endif ISSMS}
 begin
   result := '';
 {$ifdef ISSMS} // open parameters are not a true array in JavaScript
@@ -1536,7 +1534,7 @@ begin
       result := result+'&'+name+'='+UrlEncode(value);
     end;
   end;
-{$else}
+{$else ISSMS}
   n := high(aNameValueParameters);
   if n>0 then
   begin
@@ -1551,7 +1549,7 @@ begin
       result := result+'&'+name+'='+UrlEncode(value);
     end;
   end;
-{$endif}
+{$endif ISSMS}
   if result<>'' then
     result[1] := '?';
 end;
@@ -1572,7 +1570,7 @@ function UrlDecode(const aValue: string): string;
 begin
   result := decodeURIComponent(aValue);
 end;
-{$else}
+{$else ISSMS}
 var i,c,n,len: integer;
     utf8: TUTF8Buffer;
 begin
@@ -1584,7 +1582,7 @@ begin
   begin
     {$ifndef NEXTGEN} // TUTF8Buffer = UTF8String is [1-based]
     inc(n);
-    {$endif}
+    {$endif NEXTGEN}
     c := ord(aValue[i]);
     case c of
     ord('+'):
@@ -1604,18 +1602,18 @@ begin
     inc(i);
     {$ifdef NEXTGEN} // TUTF8Buffer = TBytes is [0-based]
     inc(n);
-    {$endif}
+    {$endif NEXTGEN}
   end;
   SetLength(utf8,n);
   {$ifdef NEXTGEN}
-  result := TEncoding.UTF8.GetString(utf8);
-  {$else}
-  {$ifdef UNICODE}
-  result := UTF8ToString(utf8);
-  {$else}
-  result := Utf8Decode(utf8);
-  {$endif}
-  {$endif}
+    result := TEncoding.UTF8.GetString(utf8);
+  {$else NEXTGEN}
+    {$ifdef UNICODE}
+      result := UTF8ToString(utf8);
+    {$else UNICODE}
+      result := Utf8Decode(utf8);
+    {$endif UNICODE}
+  {$endif NEXTGEN}
 end;
 {$endif ISSMS}
 
@@ -1783,14 +1781,14 @@ begin
   result := true;
 end;
 
-{$endif}
+{$endif ISSMS}
 
 function TSQLRecord.FromJSON(const aJSON: string): boolean;
 var doc: TJSONVariantData;
     table: TSQLTableJSON;
     {$ifndef ISSMS}
     i: Integer;
-    {$endif}
+    {$endif ISSMS}
 begin
   if (self=nil) or (aJSON='') then
     result := false else
@@ -1807,13 +1805,13 @@ begin
     {$ifdef ISSMS}
     doc := TJSONVariantData.Create(aJSON);
     result := FromNamesValues(doc.Names,doc.Values,0);
-    {$else}
+    {$else ISSMS}
     doc.Init(aJSON);
     for i := 0 to doc.Count-1 do
       if IsRowID(doc.Names[i]) then
         doc.Names[i] := 'ID';
     result := doc.ToObject(self);
-    {$endif}
+    {$endif ISSMS}
   end;
 end;
 
@@ -1851,9 +1849,9 @@ begin
     var rtti := GetRTTI;
     for var f := 0 to high(rtti.Props) do
       result[rtti.Props[f].Name] := GetProperty(f);
-    {$else}
+    {$else ISSMS}
     result := JSONVariant(ObjectToJSON(self));
-    {$endif}
+    {$endif ISSMS}
   end;
 end;
 
@@ -1920,7 +1918,7 @@ begin
     Value.fInternalState := fInternalState;
 end;
 
-{$else}
+{$else ISDWS}
 
 function TSQLTableJSON.FillOne(aValue: TSQLRecord; aSeekFirst: boolean): boolean;
 begin
@@ -1981,9 +1979,9 @@ begin
     if f in fields then
       {$ifdef ISSMS}
       Value.SetProperty(ord(f),TimeStamp);
-      {$else}
+      {$else ISSMS}
       SetInstanceProp(Value,Prop[f].RTTI,TimeStamp);
-      {$endif}
+      {$endif ISSMS}
 end;
 
 function GetDisplayNameFromClass(C: TClass): string;
@@ -2009,10 +2007,10 @@ var f: TSQLFieldBit;
     Kind: TSQLFieldKind;
 {$ifdef ISDWS}
     rtti: TRTTIPropInfos;
-{$else}
+{$else ISDWS}
     List: TRTTIPropInfoDynArray;
     Names: TStringDynArray;
-{$endif}
+{$endif ISDWS}
 begin
   Table := aTable;
   Name := GetDisplayNameFromClass(Table);
@@ -2020,7 +2018,7 @@ begin
   rtti := aTable.GetRTTI;
   Prop := rtti.Props;
   PropCache := rtti.PropCache;
-  {$else}
+  {$else ISDWS}
   GetPropsInfo(Table.ClassInfo,Names,List);
   SetLength(Prop,length(List));
   for f := 0 to high(List) do 
@@ -2031,7 +2029,7 @@ begin
     else
       Prop[f].Name := Names[f];
   end;
-  {$endif}
+  {$endif ISDWS}
   for f := 0 to TSQLFieldBit(high(Prop)) do 
   begin
     include(AllFields,f);
@@ -2069,7 +2067,7 @@ begin
     Prop[i].Free;
 end;
 
-{$endif}
+{$endif ISSMS}
 
 function TSQLModelInfo.FieldBitsToFieldNames(
   const FieldBits: TSQLFieldBits): string;
@@ -2104,7 +2102,7 @@ begin
       var Info: TSQLModelInfoPropInfo;
       if Find(PropCache,field,info) then
         include(result,info.FieldIndex);
-      {$else}
+      {$else ISSMS}
       if IsRowID(field) then
         Include(result,ID_SQLFIELD) else
         for f := 1 to length(Prop)-1 do
@@ -2113,17 +2111,17 @@ begin
             include(result,f);
             break;
           end;
-      {$endif}
+      {$endif ISSMS}
     end;
     {$ifdef ISSMS}
     if IncludeModTimeFields and (sftModTime in HasKind) then
       for f := 1 to length(Prop)-1 do
         if f in ModTimeFields then
           include(result,f);
-    {$else}
+    {$else ISSMS}
     if IncludeModTimeFields then
       result := result+ModTimeFields;
-    {$endif}
+    {$endif ISSMS}
   end;
 end;
 
@@ -2144,7 +2142,7 @@ begin
     if f in Fields then
       doc[Prop[ord(f)].Name] := Value.GetProperty(f);
   result := JSON.Stringify(doc); // rely on JavaScript serialization
-{$else}
+{$else ISSMS}
   result := '{';
   for f := 0 to length(Prop)-1 do
     if f in Fields then
@@ -2154,7 +2152,7 @@ begin
     result := 'null' 
   else
     result[Length(Result)] := '}';
-{$endif}
+{$endif ISSMS}
 end;
 
 function TSQLModelInfo.ToJSONAdd(Client: TSQLRest;
@@ -2195,10 +2193,10 @@ begin
   nfo := TSQLModelInfo.CreateFromRTTI(Table);
   {$ifdef ISSMS}
   fInfo.Add(nfo);
-  {$else}
+  {$else ISSMS}
   SetLength(fInfo,n+1);
   fInfo[n] := nfo;
-  {$endif}
+  {$endif ISSMS}
 end;
 
 constructor TSQLModel.Create(const Tables: array of TSQLRecordClass;
@@ -2208,11 +2206,11 @@ begin
   {$ifdef ISSMS}
   for t := 0 to high(Tables) do
     fInfo.Add(TSQLModelInfo.CreateFromRTTI(Tables[t]));
-  {$else}
+  {$else ISSMS}
   SetLength(fInfo,length(Tables));
   for t := 0 to high(fInfo) do
     fInfo[t] := TSQLModelInfo.CreateFromRTTI(Tables[t]);
-  {$endif}
+  {$endif ISSMS}
   if aRoot<>'' then
     if aRoot[length(aRoot)]='/' then
       fRoot := copy(aRoot,1,Length(aRoot)-1) 
@@ -2248,7 +2246,7 @@ begin
     fInfo[i].Free;
 end;
 
-{$endif}
+{$endif ISSMS}
 
 function TSQLModel.InfoExisting(aTable: TSQLRecordClass): TSQLModelInfo;
 begin
@@ -2360,7 +2358,7 @@ var rows: TSQLTableJSON;
 begin
   {$ifndef ISSMS} // result is already created as "array of TObject"
   result := TObjectList.Create;
-  {$endif}
+  {$endif ISSMS}
   rows := MultiFieldValues(Table,FieldNames,SQLWhere,BoundsSQLWhere);
   if rows<>nil then
   try
@@ -2399,7 +2397,7 @@ begin
     rows.Free;
   end;
 end;
-{$endif}
+{$endif ISDELPHI2010}
 
 function TSQLRest.Add(Value: TSQLRecord; SendData, ForceID: boolean;
   const FieldNames: string): TID;
@@ -2526,7 +2524,8 @@ begin
     result := HTTP_BADREQUEST 
   else
   try
-    if BatchCount>0 then begin
+    if BatchCount>0 then
+    begin
       fBatch[length(fBatch)] := ']';
       if fBatchTable<>nil then
         fBatch := fBatch+'}';
@@ -2601,13 +2600,13 @@ procedure TSQLRest.Log(E: Exception);
 begin
   if Assigned(self) and Assigned(fOnLog) and (sllException in fLogLevel) then 
   begin
-   {$ifdef ISSMS}
-   var msg: string;
-   asm @msg = new Error().stack; end;
-   Log(sllException,'%s raised with message "%s" %s',[E.ClassName,E.Message,msg]);
-   {$else}
-   Log(sllException,'%s raised with message "%s"',[E.ClassName,E.Message]);
-   {$endif}
+    {$ifdef ISSMS}
+    var msg: string;
+    asm @msg = new Error().stack; end;
+    Log(sllException,'%s raised with message "%s" %s',[E.ClassName,E.Message,msg]);
+    {$else}
+    Log(sllException,'%s raised with message "%s"',[E.ClassName,E.Message]);
+    {$endif}
   end;
 end;
 
@@ -3687,7 +3686,8 @@ begin
   begin
     var s: string := Value;
     if s='' then
-      result := null else
+      result := null
+    else
       result := BrowserAPI.Window.atob(s);
   end else
     result := null;
