@@ -1898,7 +1898,8 @@ begin
       SetInstanceProp(Instance,
         GetPropInfo(Instance,Names[i]),Values[i]);
   jvArray:
-    if Instance.InheritsFrom(TCollection) then begin
+    if Instance.InheritsFrom(TCollection) then
+    begin
       TCollection(Instance).Clear;
       for i := 0 to Count-1 do begin
         aItem := TCollection(Instance).Add;
