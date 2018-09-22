@@ -56106,7 +56106,7 @@ const
   DEFCC = ccRegister;
   {$else}
   DEFCC = ccStdCall;
-  {$ifend}
+  {$ENDIF}
 var P: Pointer;
     {$ifdef FPC}
     PI: TYPINFO.PInterfaceData;

@@ -6972,16 +6972,12 @@ const
   // (this is the maximum number of items in a Delphi set)
   {$ifdef MAX_SQLFIELDS_128}
   MAX_SQLFIELDS = 128;
-  {$else}
-  {$ifdef MAX_SQLFIELDS_192}
+  {$elseif MAX_SQLFIELDS_192}
   MAX_SQLFIELDS = 192;
-  {$else}
-  {$ifdef MAX_SQLFIELDS_256}
+  {$elseif MAX_SQLFIELDS_256}
   MAX_SQLFIELDS = 256;
   {$else}
   MAX_SQLFIELDS = 64;
-  {$endif}
-  {$endif}
   {$endif}
 
   /// sometimes, the ID field is included in a bits set
