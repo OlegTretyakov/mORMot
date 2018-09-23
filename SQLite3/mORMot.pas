@@ -4855,7 +4855,7 @@ function StatusCodeIsSuccess(Code: integer): boolean;
 
 /// check the supplied HTTP header to not contain more than one EOL
 // - to avoid unexpected HTTP body injection, e.g. from unsafe business code
-function IsInvalidHttpHeader(head: PUTF8Char; headlen: integer): boolean;
+function IsInvalidHttpHeader(head: PUTF8Char; headlen: PtrInt): boolean;
 
 /// computes an URI with optional jwt authentication parameter
 // - if AuthenticationBearer is set, will add its values as additional parameter:
@@ -6119,9 +6119,9 @@ type
   // kind of custom routing or execution scheme
   // - instantiated by the TSQLRestServer.URI() method using its ServicesRouting
   // property
-  // - see TSQLRestRoutingREST and TSQLRestRoutingJSON_RPC
-  // for overridden methods - NEVER set this abstract TSQLRestServerURIContext
-  // class on TSQLRest.ServicesRouting property !
+  // - see TSQLRestRoutingREST and TSQLRestRoutingJSON_RPC for working inherited
+  // classes - NEVER set this abstract TSQLRestServerURIContext class to
+  // TSQLRest.ServicesRouting property !
   TSQLRestServerURIContext = class
   protected
     fInput: TRawUTF8DynArray; // even items are parameter names, odd are values
@@ -17653,7 +17653,10 @@ type
     // - any connection attempt from this IP Address will be rejected by
     function BanIP(const aIP: RawUTF8; aRemoveBan: boolean=false): boolean;
     /// (un)register a an IPv4 value to the JWT white list
-    // - JWT connection attempts will be validated against this IP list
+    // - by default, a JWT validated by JWTForUnauthenticatedRequest will be accepted
+    // - to avoid MiM (Man-In-the-Middle) attacks, if a JWT white list is defined
+    // using this method, any connection from a non registered IP will be rejected,
+    // even with a valid JWT
     // - WebSockets connections are secure enough to bypass this list
     function JWTForUnauthenticatedRequestWhiteIP(const aIP: RawUTF8; aRemoveWhite: boolean=false): boolean;
     /// add all published methods of a given object instance to the method-based
@@ -24604,8 +24607,8 @@ begin
   result := mNone;
 end;
 
-function IsInvalidHttpHeader(head: PUTF8Char; headlen: integer): boolean;
-var i: integer;
+function IsInvalidHttpHeader(head: PUTF8Char; headlen: PtrInt): boolean;
+var i: PtrInt;
 begin
   result := true;
   for i := 0 to headlen-3 do
@@ -42733,7 +42736,7 @@ begin
     end;
     if not (rsoHttpHeaderCheckDisable in fOptions) and
        IsInvalidHttpHeader(pointer(Call.OutHead), length(Call.OutHead)) then
-      Ctxt.Error('Unsafe HTTP header rejected', HTTP_SERVERERROR);
+      Ctxt.Error('Unsafe HTTP header rejected [%]', [EscapeToShort(Call.OutHead)], HTTP_SERVERERROR);
   finally
     QueryPerformanceCounter(timeEnd);
     Ctxt.MicroSecondsElapsed := fStats.FromExternalQueryPerformanceCounters(timeEnd-timeStart);
@@ -46293,7 +46296,7 @@ begin
           R := result - 1;
       until (L > R);
     end else
-      // IDs are not sorted (not possible in practice) -> O(n) lookup
+      // IDs are not sorted (not possible in practice) or only a few -> O(n) lookup
       for result := 0 to R do
         if rec[result].fID=ID then
           exit;
@@ -55375,8 +55378,8 @@ begin
     @fMethodsCount,true);
   AddMethodsFromTypeInfo(aInterface); // from RTTI or generated code
   if fMethodsCount=0 then
-    raise EInterfaceFactoryException.CreateUTF8(
-      '%.Create(%): interface has no RTTI',[self,fInterfaceName]);
+    raise EInterfaceFactoryException.CreateUTF8('%.Create(%): interface has '+
+      'no RTTI - should inherit from IInvokable',[self,fInterfaceName]);
   if fMethodsCount>MAX_METHOD_COUNT then
     raise EInterfaceFactoryException.CreateUTF8(
       '%.Create(%): interface has too many methods (%), so breaks the '+
@@ -62319,8 +62322,8 @@ begin
         ct := FindIniNameValue(pointer(head), HEADER_CONTENT_TYPE_UPPER);
         if (resp[1] in ['[','{','"']) and IdemPChar(pointer(ct), JSON_CONTENT_TYPE_UPPER) then
           SynLog.Log(sllServiceReturn,resp,self,MAX_SIZE_RESPONSE_LOG) else
-          SynLog.Log(sllServiceReturn,'TServiceCustomAnswer=% % len=%',
-            [status,ct,length(resp)],self);
+          SynLog.Log(sllServiceReturn,'TServiceCustomAnswer=% % len=% %',
+            [status,ct,length(resp),EscapeToShort(resp)],self);
       end;
     {$endif WITHLOG}
     aServiceCustomAnswer^.Status := status;

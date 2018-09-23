@@ -9351,6 +9351,10 @@ type
     function ForEach(const OnMatch: TSynDictionaryEvent;
       KeyCompare,ValueCompare: TDynArraySortCompare; const aKey,aValue;
       Opaque: pointer=nil): integer; overload;
+    /// touch the entry timeout field so that it won't be deprecated sooner
+    // - this method is not thread-safe, and is expected to be execute e.g.
+    // from a ForEach() TSynDictionaryEvent callback
+    procedure SetTimeoutAtIndex(aIndex: integer);
     /// search aArrayValue item in a dynamic-array value associated via aKey
     // - expect the stored value to be a dynamic array itself
     // - would search for aKey as primary key, then use TDynArray.Find
@@ -9447,7 +9451,7 @@ type
     property CompressAlgo: TAlgoCompress read fCompressAlgo write fCompressAlgo;
     /// callback to by-pass DeleteDeprecated deletion by returning false
     // - can be assigned e.g. to OnCanDeleteSynPersistentLock if Value is a
-    // TSynPersistentLock instance, to avoid any potential access violdation
+    // TSynPersistentLock instance, to avoid any potential access violation
     property OnCanDeleteDeprecated: TSynDictionaryCanDeleteEvent read fOnCanDelete write fOnCanDelete;
   end;
 
@@ -10858,14 +10862,14 @@ function ByteToHex(P: PAnsiChar; Value: byte): PAnsiChar;
 // - will be #0 terminated, with '...' characters trailing on overflow
 // - ensure the destination buffer contains at least max*3+3 bytes, which is
 // always the case when using LogEscape() and its local TLogEscape variable
-procedure EscapeBuffer(s,d: PAnsiChar; len,max: integer);
+function EscapeBuffer(s,d: PAnsiChar; len,max: integer): PAnsiChar;
 
 const
   /// maximum size, in bytes, of a TLogEscape / LogEscape() buffer
   LOGESCAPELEN = 200;
 type
   /// buffer to be allocated on stack when using LogEscape()
-  TLogEscape = array[0..LOGESCAPELEN*3+3] of AnsiChar;
+  TLogEscape = array[0..LOGESCAPELEN*3+5] of AnsiChar;
 
 /// fill TLogEscape stack buffer with the (hexadecimal) chars of the input binary
 // - up to LOGESCAPELEN (i.e. 200) bytes will be escaped and appended to a
@@ -10878,6 +10882,12 @@ type
 function LogEscape(source: PAnsiChar; sourcelen: integer; var temp: TLogEscape;
   enabled: boolean=true): PAnsiChar;
   {$ifdef HASINLINE}inline;{$endif}
+
+/// fill a shortstring with the (hexadecimal) chars of the input text/binary
+function EscapeToShort(source: PAnsiChar; sourcelen: integer): shortstring; overload;
+
+/// fill a shortstring with the (hexadecimal) chars of the input text/binary
+function EscapeToShort(const source: RawByteString): shortstring; overload;
 
 /// fast conversion from a pointer data into hexa chars, ready to be displayed
 // - use internally BinToHexDisplay()
@@ -28715,13 +28725,11 @@ begin
   result := P+2;
 end;
 
-procedure EscapeBuffer(s,d: PAnsiChar; len,max: integer);
+function EscapeBuffer(s,d: PAnsiChar; len,max: integer): PAnsiChar;
 var i: integer;
 begin
   if len>max then
     len := max;
-  d^ := ' ';
-  inc(d);
   for i := 1 to len do begin
     if s^ in [' '..#126] then begin
       d^ := s^;
@@ -28734,18 +28742,33 @@ begin
     end;
     inc(s);
   end;
-  if len=max then
-    PCardinal(d)^ := ord('.')+ord('.')shl 8+ord('.')shl 16 else
+  if len=max then begin
+    PCardinal(d)^ := ord('.')+ord('.')shl 8+ord('.')shl 16;
+    inc(d,3);
+  end else
     d^ := #0;
+  result := d;
 end;
 
 function LogEscape(source: PAnsiChar; sourcelen: integer; var temp: TLogEscape;
   enabled: boolean): PAnsiChar;
 begin
-  if enabled then
-    EscapeBuffer(source,@temp,sourcelen,LOGESCAPELEN) else
+  if enabled then begin
+    temp[0] := ' ';
+    EscapeBuffer(source,@temp[1],sourcelen,LOGESCAPELEN);
+  end else
     temp[0] := #0;
   result := @temp;
+end;
+
+function EscapeToShort(source: PAnsiChar; sourcelen: integer): shortstring;
+begin
+  result[0] := AnsiChar(EscapeBuffer(source,@result[1],sourcelen,80)-@result[1]);
+end;
+
+function EscapeToShort(const source: RawByteString): shortstring; overload;
+begin
+  result[0] := AnsiChar(EscapeBuffer(pointer(source),@result[1],length(source),80)-@result[1]);
 end;
 
 procedure BinToHexDisplay(Bin, Hex: PAnsiChar; BinBytes: integer);
@@ -59170,6 +59193,16 @@ begin
   finally
     fSafe.UnLock;
   end;
+end;
+
+procedure TSynDictionary.SetTimeoutAtIndex(aIndex: integer);
+var tim: cardinal;
+begin
+  if cardinal(aIndex) >= cardinal(fSafe.Padding[DIC_KEYCOUNT].VInteger) then
+    exit;
+  tim := fSafe.Padding[DIC_TIMESEC].VInteger;
+  if tim > 0 then
+    fTimeOut[aIndex] := cardinal(GetTickCount64 shr 10)+tim;
 end;
 
 function TSynDictionary.Count: integer;
