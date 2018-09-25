@@ -6978,7 +6978,7 @@ const
   MAX_SQLFIELDS = 256;
   {$else}
   MAX_SQLFIELDS = 64;
-  {$endif}
+  {$IFEND}
 
   /// sometimes, the ID field is included in a bits set
   MAX_SQLFIELDS_INCLUDINGID = MAX_SQLFIELDS+1;
