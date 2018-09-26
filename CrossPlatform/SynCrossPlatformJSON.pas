@@ -923,7 +923,8 @@ end;
 
 function TJSONParser.GetNextChar: char;
 begin
-  if Index<=JSONLength then begin
+  if Index<=JSONLength then
+  begin
     result := JSON[Index];
     inc(Index);
   end else
@@ -934,7 +935,8 @@ function TJSONParser.GetNextNonWhiteChar: char;
 begin
   if Index<=JSONLength then
     repeat
-      if JSON[Index]>' ' then begin
+      if JSON[Index]>' ' then
+      begin
         result := JSON[Index];
         inc(Index);
         exit;
@@ -948,7 +950,8 @@ function TJSONParser.CheckNextNonWhiteChar(aChar: char): boolean;
 begin
   if Index<=JSONLength then
     repeat
-      if JSON[Index]>' ' then begin
+      if JSON[Index]>' ' then
+      begin
         result := JSON[Index]=aChar;
         if result then
           inc(Index);
@@ -978,7 +981,8 @@ begin
       'n': AppendChar(str,#$0a);
       'f': AppendChar(str,#$0c);
       'r': AppendChar(str,#$0d);
-      'u': begin
+      'u':
+      begin
         u := Copy(JSON,Index,4);
         if length(u)<>4 then
           exit;
@@ -988,10 +992,12 @@ begin
           exit;
         AppendChar(str,char(unicode));
       end;
-      else AppendChar(str,c);
+      else
+        AppendChar(str,c);
       end;
     end;
-    else AppendChar(str,c);
+    else
+      AppendChar(str,c);
     end;
   until false;
 end;
@@ -1001,13 +1007,15 @@ var i: integer;
 begin
   for i := Index to JSONLength do
     case JSON[i] of
-    '"': begin // end of string without escape -> direct copy
+    '"':
+    begin // end of string without escape -> direct copy
       str := copy(JSON,Index,i-Index);
       Index := i+1;
       result := true;
       exit;
     end;
-    '\': begin // need unescaping
+    '\':
+    begin // need unescaping
       str := copy(JSON,Index,i-Index);
       Index := i;
       GetNextStringUnEscape(str);
@@ -1041,7 +1049,8 @@ begin
       result := true;
       exit;
     end;
-    else exit;
+    else
+      exit;
     end;
 end;
 
@@ -1053,42 +1062,50 @@ var str: string;
 begin
   result := kNone;
   case GetNextNonWhiteChar of
-  'n': if copy(JSON,Index,3)='ull' then begin
+  'n': if copy(JSON,Index,3)='ull' then
+    begin
          inc(Index,3);
          result := kNull;
          Value := null;
-       end;
-  'f': if copy(JSON,Index,4)='alse' then begin
+    end;
+  'f': if copy(JSON,Index,4)='alse' then
+    begin
          inc(Index,4);
          result := kFalse;
          Value := false;
-       end;
-  't': if copy(JSON,Index,3)='rue' then begin
+    end;
+  't': if copy(JSON,Index,3)='rue' then
+    begin
          inc(Index,3);
          result := kTrue;
          Value := true;
-       end;
-  '"': if GetNextString(str) then begin
+    end;
+  '"': if GetNextString(str) then
+    begin
          result := kString;
          Value := str;
-       end;
+    end;
   '{': if ParseJSONObject(TJSONVariantData(Value)) then
          result := kObject;
   '[': if ParseJSONArray(TJSONVariantData(Value)) then
          result := kArray;
-  '-','0'..'9': begin
+  '-','0'..'9':
+  begin
     start := Index-1;
     while true do
       case JSON[Index] of
       '-','+','0'..'9','.','E','e': inc(Index);
-      else break;
+      else
+        break;
       end;
     str := copy(JSON,start,Index-start);
     val(str,i64,err);
-    if err=0 then begin
+    if err=0 then
+    begin
       Value := i64;
       result := kInteger;
-    end else begin
+    end else
+    begin
       val(str,d,err);
       if err<>0 then
         exit;
@@ -1135,11 +1152,12 @@ begin
   Data.Init;
   if not CheckNextNonWhiteChar('}') then // '{}' -> void object
     repeat
-      if CheckNextNonWhiteChar('"') then begin
+      if CheckNextNonWhiteChar('"') then
+      begin
         if (not GetNextString(key)) or (GetNextNonWhiteChar<>':') then
           exit;
-      end else
-        if not GetNextAlphaPropName(key) then
+      end
+      else if not GetNextAlphaPropName(key) then
           exit;                             
       if GetNextJSON(val)=kNone then
         exit; // writeln(Copy(JSON,Index-10,30));
@@ -1179,19 +1197,22 @@ var i,len,x,c,j: cardinal;
     P: PChar;
 begin
   len := length(Bytes);
-  if len=0 then begin
+  if len=0 then
+  begin
     result := '';
     exit;
   end;
   if withBase64Magic then
-    x := JSON_BASE64_MAGIC_LEN else
+    x := JSON_BASE64_MAGIC_LEN
+  else
     x := 0;
   SetLength(result,((len+2)div 3)*4+x);
   P := pointer(result);
   if withBase64Magic then
     move(JSON_BASE64_MAGIC,P^,sizeof(JSON_BASE64_MAGIC));
   j := 0;
-  for i := 1 to len div 3 do begin
+  for i := 1 to len div 3 do
+  begin
     c := Bytes[j] shl 16 or Bytes[j+1] shl 8 or Bytes[j+2];
     inc(j,3);
     P[x]   := BASE64[(c shr 18) and $3f];
@@ -1201,7 +1222,8 @@ begin
     inc(x,4);
   end;
   case len mod 3 of
-    1: begin
+    1:
+    begin
       c := Bytes[j] shl 4;
       P[x]   := BASE64[(c shr 6) and $3f];
       P[x+1] := BASE64[c and $3f];
@@ -1209,7 +1231,8 @@ begin
       P[x+3] := '=';
       inc(x,4);
     end;
-    2: begin
+    2:
+    begin
       c := Bytes[j] shl 10 or Bytes[j+1] shl 2;
       P[x]   := BASE64[(c shr 12) and $3f];
       P[x+1] := BASE64[(c shr 6) and $3f];
@@ -1226,7 +1249,8 @@ function Base64One(c: Char): integer;
 begin
   result := ord(c);
   if result>127 then
-    result := -1 else
+    result := -1
+  else
     result := BASE64DECODE[result];
 end;
 
@@ -1242,17 +1266,22 @@ begin
       magiclen := JSON_BASE64_MAGIC_LEN else
       {$ifndef UNICODE}
       if JSONString[1]='?' then // handle UTF-8 decoding error on ANSI Delphi
-        magiclen := 1 else
+        magiclen := 1
+      else
       {$endif}
-      exit else
+      exit
+  else
     magiclen := 0; // withBase64Magic=false
   x := length(JSONString);
   len := x-magiclen;
   if len and 3<>0 then
     exit;
   if len=0 then
-    Bytes := nil else begin
-    if BASE64DECODE=nil then begin
+    Bytes := nil
+  else
+  begin
+    if BASE64DECODE=nil then
+    begin
       SetLength(BASE64DECODE,128);
       for i := 0 to 127 do
         BASE64DECODE[i] := -1;
@@ -1260,7 +1289,8 @@ begin
         BASE64DECODE[ord(BASE64[i])] := i;
     end;
     len := (len shr 2)*3;
-    if Base64One(JSONString[x])<0 then begin
+    if Base64One(JSONString[x])<0 then
+    begin
       dec(len);
       if Base64One(JSONString[x-1])<0 then
         dec(len);
@@ -1269,7 +1299,8 @@ begin
     bits := 0;
     value := 0;
     len := 0;
-    for i := magiclen+1 to Length(JSONString) do begin
+    for i := magiclen+1 to Length(JSONString) do
+    begin
       x := ord(JSONString[i]); // inlined Base64One(JSONString[i])
       if x>127 then
         break;
@@ -1278,7 +1309,8 @@ begin
         break;
       value := value*64+x;
       bits := bits+6;
-      if bits>=8 then begin
+      if bits>=8 then
+      begin
         bits := bits-8;
         x := value shr bits;
         value := value and ((1 shl bits)-1);
@@ -1303,7 +1335,8 @@ begin
   n := GetPropList(PTypeInfo(TypeInfo),List);
   SetLength(PropNames,n);
   SetLength(PropRTTI,n);
-  for i := 0 to n-1 do begin
+  for i := 0 to n-1 do
+  begin
     PropRTTI[i] := List^[i];
     PropNames[i] := ShortStringToString(@PropRTTI[i]^.Name);
   end;
@@ -1369,14 +1402,17 @@ begin
   {$endif NEXTGEN}
   tkFloat:
     if IsDateTime(PropInfo) then
-      result := DateTimeToIso8601(GetFloatProp(Instance,PropInfo)) else
+      result := DateTimeToIso8601(GetFloatProp(Instance,PropInfo))
+    else
       result := GetFloatProp(Instance,PropInfo);
   tkVariant:
     result := GetVariantProp(Instance,PropInfo);
-  tkClass: begin
+  tkClass:
+  begin
     obj := TObject(NativeInt(GetOrdProp(Instance,PropInfo)));
     if obj=nil then
-      result := null else
+      result := null
+    else
       TJSONVariantData(result).Init(ObjectToJSON(obj, StoreClassName));
   end;
   tkDynArray:
@@ -1394,48 +1430,57 @@ begin
   case PropInfo^.PropType^.Kind of
   tkInt64{$ifdef FPC}, tkQWord{$endif}:
     if TVarData(Value).VType=varInt64 then
-      SetInt64Prop(Instance,PropInfo,TVarData(Value).VInt64) else
+      SetInt64Prop(Instance,PropInfo,TVarData(Value).VInt64)
+    else
       SetOrdProp(Instance,PropInfo,Value);
   tkEnumeration, tkInteger, tkSet:
     SetOrdProp(Instance,PropInfo,Value);
   {$ifdef NEXTGEN}
   tkUString:
     if TVarData(Value).VType<=varNull then
-      SetStrProp(Instance,PropInfo,'') else
+      SetStrProp(Instance,PropInfo,'')
+    else
       SetStrProp(Instance,PropInfo,Value);
   {$else}
   {$ifdef FPC}tkAString,{$endif} tkLString:
     if TVarData(Value).VType<=varNull then
-      SetStrProp(Instance,PropInfo,'') else
+      SetStrProp(Instance,PropInfo,'')
+    else
       SetStrProp(Instance,PropInfo,Value);
   tkWString:
     if TVarData(Value).VType<=varNull then
-      SetWideStrProp(Instance,PropInfo,'') else
+      SetWideStrProp(Instance,PropInfo,'')
+    else
       SetWideStrProp(Instance,PropInfo,Value);
   {$ifdef UNICODE}
   tkUString:
     if TVarData(Value).VType<=varNull then
-      SetUnicodeStrProp(Instance,PropInfo,'') else
+      SetUnicodeStrProp(Instance,PropInfo,'')
+    else
       SetUnicodeStrProp(Instance,PropInfo,Value);
   {$endif UNICODE}
   {$endif NEXTGEN}
   tkFloat:
     if IsDateTime(PropInfo) and VarIsStr(Value) then
-      SetFloatProp(Instance,PropInfo,Iso8601ToDateTime(Value)) else
+      SetFloatProp(Instance,PropInfo,Iso8601ToDateTime(Value))
+    else
       SetFloatProp(Instance,PropInfo,Value);
   tkVariant:
     SetVariantProp(Instance,PropInfo,Value);
   tkDynArray:
-    if IsBlob(PropInfo) then begin
+    if IsBlob(PropInfo) then
+    begin
       blob := GetTByteDynArrayProp(Instance,PropInfo);
       if (TVarData(Value).VType<=varNull) or
         not Base64JSONStringToBytes(Value,blob^) then
         Finalize(blob^);
     end;
-  tkClass: begin
+  tkClass:
+  begin
     obj := TObject(NativeInt(GetOrdProp(Instance,PropInfo)));
     if TVarData(Value).VType>varNull then
-      if obj=nil then begin
+      if obj=nil then
+      begin
         obj := JSONVariantData(Value)^.ToNewObject;
         if obj<>nil then
           SetOrdProp(Instance,PropInfo,NativeInt(obj));
@@ -1452,11 +1497,15 @@ var doc: TJSONVariantData;
 begin
   doc.Init(JSON);
   if (doc.VKind<>jvArray) or (ItemClass=nil) then
-    result := nil else begin
+    result := nil
+  else
+  begin
     result := TObjectList.Create;
-    for i := 0 to doc.Count-1 do begin
+    for i := 0 to doc.Count-1 do
+    begin
       item := ItemClass.Create;
-      if not JSONVariantData(doc.Values[i])^.ToObject(item) then begin
+      if not JSONVariantData(doc.Values[i])^.ToObject(item) then
+      begin
         FreeAndNil(result);
         exit;
       end;
@@ -1469,7 +1518,9 @@ function JSONToObject(Instance: TObject; const JSON: string): boolean;
 var doc: TJSONVariantData;
 begin
   if Instance=nil then
-    result := false else begin
+    result := false
+  else
+  begin
     doc.Init(JSON);
     result := doc.ToObject(Instance);
   end;
@@ -1501,7 +1552,8 @@ var i: integer;
 begin
   i := FindClassForJSON(ClassName);
   if i<0 then
-    result := nil else
+    result := nil
+  else
     result := RegisteredClass[i].ClassType.Create;
 end;
 
@@ -1509,7 +1561,8 @@ procedure RegisterClassForJSON(const Classes: array of TClass);
 var c,i: integer;
     name: string;
 begin
-  for c := 0 to high(Classes) do begin
+  for c := 0 to high(Classes) do
+  begin
     name := string(Classes[c].ClassName);
     i := FindClassForJSON(name);
     if i>=0 then
@@ -1527,14 +1580,18 @@ var TypeInfo: PTypeInfo;
     PropList: PPropList;
     PropInfo: PPropInfo;
 begin
-  if Instance=nil then begin
+  if Instance=nil then
+  begin
     result := 'null';
     exit;
   end;
   {$ifndef NEXTGEN}
-  if Instance.InheritsFrom(TList) then begin
+  if Instance.InheritsFrom(TList) then
+  begin
     if TList(Instance).Count=0 then
-      result := '[]' else begin
+      result := '[]'
+    else
+    begin
       result := '[';
       for i := 0 to TList(Instance).Count-1 do
         result := result+ObjectToJSON(TObject(
@@ -1544,9 +1601,12 @@ begin
     exit;
   end;
   {$endif}
-  if Instance.InheritsFrom(TStrings) then begin
+  if Instance.InheritsFrom(TStrings) then
+  begin
     if TStrings(Instance).Count=0 then
-      result := '[]' else begin
+      result := '[]'
+    else
+    begin
       result := '[';
       for i := 0 to TStrings(Instance).Count-1 do
         result := result+StringToJSON(TStrings(Instance).Strings[i])+',';
@@ -1554,9 +1614,12 @@ begin
     end;
     exit;
   end;
-  if Instance.InheritsFrom(TCollection) then begin
+  if Instance.InheritsFrom(TCollection) then
+  begin
     if TCollection(Instance).Count=0 then
-      result := '[]' else begin
+      result := '[]'
+    else
+    begin
       result := '[';
       for i := 0 to TCollection(Instance).Count-1 do
         result := result+ObjectToJSON(TCollection(Instance).Items[i],StoreClassName)+',';
@@ -1565,7 +1628,8 @@ begin
     exit;
   end;
   TypeInfo := Instance.ClassInfo;
-  if TypeInfo=nil then begin
+  if TypeInfo=nil then
+  begin
     result := 'null';
     exit;
   end;
@@ -1573,9 +1637,11 @@ begin
   if PropCount>0 then
     try
       if StoreClassName then
-        result := '{"ClassName":"'+string(Instance.ClassName)+'",' else
+        result := '{"ClassName":"'+string(Instance.ClassName)+'",'
+      else
         result := '{';
-      for i := 0 to PropCount-1 do begin
+      for i := 0 to PropCount-1 do
+      begin
         PropInfo := PropList^[i];
         result := result+StringToJSON(ShortStringToString(@PropInfo^.Name))+':'+
           ValueToJSON(GetInstanceProp(Instance,PropInfo,StoreClassName))+',';
@@ -1584,7 +1650,7 @@ begin
     finally
       FreeMem(PropList);
     end else
-    result := 'null';
+      result := 'null';
 end;
 
 procedure GetPublishedMethods(Instance: TObject; out Methods: TPublishedMethodDynArray);
@@ -1614,7 +1680,8 @@ var n: integer;
     Method.Data := Instance;
     MCount := {$ifdef FPC}PCardinal{$else}PWord{$endif}(M)^;
     inc({$ifdef FPC}PCardinal{$else}PWord{$endif}(M));
-    for i := 1 to MCount do begin
+    for i := 1 to MCount do
+    begin
       Method.Code := M^.Addr;
       if n>=length(Methods) then
         SetLength(Methods,n+32);
@@ -1656,8 +1723,8 @@ begin
   Init;
   FromJSON(JSON);
   if VType=varNull then
-    VKind := jvObject else
-  if VType<>JSONVariantType.VarType then
+    VKind := jvObject
+  else if VType<>JSONVariantType.VarType then
     Init; // we expect a true JSON array or object here
 end;
 
@@ -1680,10 +1747,11 @@ procedure TJSONVariantData.AddNameValue(const aName: string;
   const aValue: variant);
 begin
   if VKind=jvUndefined then
-    VKind := jvObject else
-    if VKind<>jvObject then
+    VKind := jvObject
+  else if VKind<>jvObject then
       raise EJSONException.CreateFmt('AddNameValue(%s) over array',[aName]);
-  if VCount<=length(Values) then begin
+  if VCount<=length(Values) then
+  begin
     SetLength(Values,VCount+VCount shr 3+32);
     SetLength(Names,VCount+VCount shr 3+32);
   end;
@@ -1695,8 +1763,8 @@ end;
 procedure TJSONVariantData.AddValue(const aValue: variant);
 begin
   if VKind=jvUndefined then
-    VKind := jvArray else
-    if VKind<>jvArray then
+    VKind := jvArray
+  else if VKind<>jvArray then
       raise EJSONException.Create('AddValue() over object');
   if VCount<=length(Values) then
     SetLength(Values,VCount+VCount shr 3+32);
@@ -1716,21 +1784,24 @@ var i: integer;
 begin
   i := NameIndex(aName);
   if (i<0) or (TVarData(Values[i]).VType<>JSONVariantType.VarType) then
-    result := nil else
+    result := nil
+  else
     result := @Values[i];
 end;
 
 function TJSONVariantData.GetKind: TJSONVariantKind;
 begin
   if (@self=nil) or (VType<>JSONVariantType.VarType) then
-    result := jvUndefined else
+    result := jvUndefined
+  else
     result := VKind;
 end;
 
 function TJSONVariantData.GetCount: integer;
 begin
   if (@self=nil) or (VType<>JSONVariantType.VarType) then
-    result := 0 else
+    result := 0
+  else
     result := VCount;
 end;
 
@@ -1745,7 +1816,8 @@ function TJSONVariantData.GetValueCopy(const aName: string): variant;
 var i: cardinal;
 begin
   VarClear(result);
-  if (@self<>nil) and (VType=JSONVariantType.VarType) and (VKind=jvObject) then begin
+  if (@self<>nil) and (VType=JSONVariantType.VarType) and (VKind=jvObject) then
+  begin
     i := cardinal(NameIndex(aName));
     if i<cardinal(length(Values)) then
       result := Values[i];
@@ -1772,7 +1844,8 @@ function TJSONVariantData.GetVarData(const aName: string;
 var i: cardinal;
 begin
   i := cardinal(NameIndex(aName));
-  if i<cardinal(length(Values)) then begin
+  if i<cardinal(length(Values)) then
+  begin
     Dest.VType := varVariant or varByRef;
     Dest.VPointer := @Values[i];
     result := true;
@@ -1793,7 +1866,8 @@ procedure TJSONVariantData.SetPath(const aPath: string; const aValue: variant);
 var i: integer;
 begin
   for i := length(aPath) downto 1 do 
-    if aPath[i]='.' then begin
+    if aPath[i]='.' then
+    begin
       EnsureData(copy(aPath,1,i-1))^.SetValue(copy(aPath,i+1,maxInt),aValue);
       exit;
     end;
@@ -1805,13 +1879,16 @@ var i: integer;
     new: TJSONVariantData;
 begin // recursive value set
   i := Pos('.',aPath);
-  if i=0 then begin
+  if i=0 then
+  begin
     i := NameIndex(aPath);
-    if i<0 then begin // not existing: create new
+    if i<0 then
+    begin // not existing: create new
       new.Init;
       AddNameValue(aPath,variant(new));
       result := @Values[VCount-1];
-    end else begin
+    end else
+    begin
       if TVarData(Values[i]).VType<>JSONVariantType.VarType then begin
         VarClear(Values[i]);
         TJSONVariantData(Values[i]).Init; // create as TJSONVariantData
@@ -1840,7 +1917,8 @@ begin
     raise EJSONException.Create('Unexpected Value['''']');
   i := NameIndex(aName);
   if i<0 then
-    AddNameValue(aName,aValue) else
+    AddNameValue(aName,aValue)
+  else
     Values[i] := aValue;
 end;
 
@@ -1850,7 +1928,9 @@ begin
   case VKind of
   jvObject:
     if VCount=0 then
-      result := '{}' else begin
+      result := '{}'
+    else
+    begin
       result := '{';
       for i := 0 to VCount-1 do
         result := result+StringToJSON(Names[i])+':'+ValueToJSON(Values[i])+',';
@@ -1858,13 +1938,16 @@ begin
   end;
   jvArray:
     if VCount=0 then
-      result := '[]' else begin
+      result := '[]'
+    else
+    begin
       result := '[';
       for i := 0 to VCount-1 do
         result := result+ValueToJSON(Values[i])+',';
       result[length(result)] := ']';
     end;
-  else result := 'null';
+  else
+    result := 'null';
   end;
 end;
 
@@ -1901,13 +1984,13 @@ begin
     if Instance.InheritsFrom(TCollection) then
     begin
       TCollection(Instance).Clear;
-      for i := 0 to Count-1 do begin
+      for i := 0 to Count-1 do
+      begin
         aItem := TCollection(Instance).Add;
         if not JSONVariantData(Values[i])^.ToObject(aItem) then
           exit;
       end;
-    end else
-    if Instance.InheritsFrom(TStrings) then
+    end else if Instance.InheritsFrom(TStrings) then
     try
       TStrings(Instance).BeginUpdate;
       TStrings(Instance).Clear;
@@ -1950,7 +2033,9 @@ procedure TJSONVariant.Copy(var Dest: TVarData; const Source: TVarData;
   const Indirect: Boolean);
 begin
   if Indirect then
-    SimplisticCopy(Dest,Source,true) else begin
+    SimplisticCopy(Dest,Source,true)
+  else
+  begin
     VarClear(variant(Dest));
     TJSONVariantData(Dest).Init;
     TJSONVariantData(Dest) := TJSONVariantData(Source);
@@ -2010,10 +2095,12 @@ begin
      (Parser.GetNextJSON(fieldCount)=kInteger) and
      (Parser.GetNextNonWhiteChar=',') and
       Parser.CheckNextIdent('values') and
-     (Parser.GetNextNonWhiteChar='[') then begin
+     (Parser.GetNextNonWhiteChar='[') then
+  begin
     // non expanded format: {"fieldCount":2,"values":["ID","Int",1,0,2,0,3,...]
     SetLength(fFieldNames,integer(fieldCount));
-    for f := 0 to high(fFieldNames) do begin
+    for f := 0 to high(fFieldNames) do
+    begin
       if Parser.GetNextJSON(fieldName)<>kString then
         exit;
       fFieldNames[f] := fieldName;
@@ -2024,11 +2111,13 @@ begin
     end;
     if EndOfField=',' then
       fJSONIndexFirstValue := Parser.Index;
-  end else begin
+  end else
+  begin
     // expanded format: [{"ID":1,"Int":0},{"ID":2,"Int":0},{"ID":3,...]
     Parser.Index := 1;
     if (Parser.GetNextNonWhiteChar='[') and
-       (Parser.GetNextNonWhiteChar='{') then begin
+       (Parser.GetNextNonWhiteChar='{') then
+    begin
       firstValue := Parser.Index;
       f := 0;
       repeat
@@ -2043,7 +2132,8 @@ begin
         EndOfField := Parser.GetNextNonWhiteChar;
         if EndOfField<>',' then
           if EndOfField='}' then
-            break else
+            break
+          else
             exit;
       until false;
       fJSONIndexFirstValue := firstValue;
@@ -2066,7 +2156,8 @@ var ndx: integer;
 begin
   ndx := FieldIndex(FieldName);
   if ndx<0 then
-    result := null else
+    result := null
+  else
     result := fRowValues[ndx];
 end;
 
@@ -2083,7 +2174,8 @@ begin
   Parser.Init(fJSON,fJSONCurrentIndex);
   fJSONCurrentIndex := -1; // indicates end of content in case of exit below
   EndOfField := #0;
-  for f := 0 to high(fRowValues) do begin
+  for f := 0 to high(fRowValues) do
+  begin
     if fJSONExpanded and not Parser.CheckNextIdent(fFieldNames[f]) then
       exit;
     if Parser.GetNextJSON(fRowValues[f])=kNone then
@@ -2097,7 +2189,8 @@ begin
         break else
         exit;
   end;
-  if fJSONExpanded then begin
+  if fJSONExpanded then
+  begin
     if EndOfField<>'}' then
       exit;
     EndOfField := Parser.GetNextNonWhiteChar;
@@ -2115,7 +2208,8 @@ begin
   result := Step(SeekFirst);
   if not result then
     exit;
-  if TVarData(RowValues).VType<>JSONVariantType.VarType then begin
+  if TVarData(RowValues).VType<>JSONVariantType.VarType then
+  begin
     VarClear(RowValues);
     TJSONVariantData(RowValues).Init;
   end;
@@ -2131,7 +2225,8 @@ end;
 function TJSONTableObject.StepObject(Instance: TObject; SeekFirst: boolean=false): boolean;
 begin
   if (Instance=nil) then
-    result := false else
+    result := false
+  else
     result := Step(SeekFirst);
   if result then
     FillInstance(Instance);

@@ -2036,15 +2036,18 @@ begin
     Kind := Prop[ord(f)].Kind;
     include(HasKind,Kind);
     if Kind=sftBlob then
-      Include(BlobFields,f) else
+      Include(BlobFields,f)
+    else
       Include(SimpleFields,f);
     case Kind of
-    sftModTime: begin
+    sftModTime:
+    begin
       include(ModTimeFields,f);
       include(ModAndCreateTimeFields,f);
       HasTimeFields := true;
     end;
-    sftCreateTime: begin
+    sftCreateTime:
+    begin
       include(CreateTimeFields,f);
       include(ModAndCreateTimeFields,f);
       HasTimeFields := true;
@@ -2104,7 +2107,8 @@ begin
         include(result,info.FieldIndex);
       {$else ISSMS}
       if IsRowID(field) then
-        Include(result,ID_SQLFIELD) else
+        Include(result,ID_SQLFIELD)
+      else
         for f := 1 to length(Prop)-1 do
           if IdemPropName(field,Prop[ord(f)].Name) then 
           begin
@@ -2364,7 +2368,8 @@ begin
   try
     repeat
       rec := Table.Create;
-      if not rows.FillOne(rec) then begin
+      if not rows.FillOne(rec) then
+      begin
         rec.Free;
         break;
       end;
@@ -3095,8 +3100,8 @@ begin
       if not assigned(onBeforeSuccess) then
         onSuccess(self) else
         if onBeforeSuccess then
-          onSuccess(self) else
-          if assigned(onError) then
+          onSuccess(self)
+        else if assigned(onError) then
             onError(self);
       if fAsynchCount>0 then
         dec(fAsynchCount);
@@ -3179,12 +3184,12 @@ begin
         else begin
           var res := TJSONVariantData.CreateFrom(result);
           if (res.Kind=jvArray) and (res.Count=aExpectedOutputParamsCount) then
-            onSuccess(res.Values) else
+            onSuccess(res.Values)
+          else
             if Assigned(onError) then
               onError(self);
         end;
-      end else
-        if Assigned(onError) then
+      end else if Assigned(onError) then
           onError(self);
     end,
     onError,
@@ -3224,7 +3229,8 @@ begin
     exit; // returns default []
   var res := TJSONVariantData.CreateFrom(outResult);
   if (res.Kind=jvArray) and (res.Count=aExpectedOutputParamsCount) then
-    result := res.Values else
+    result := res.Values
+  else
     raise EServiceException.CreateFmt('Error calling %s.%s - '+
       'received %d parameters (expected %d)',
       [aCaller.fServiceName,aMethodName,res.Count,aExpectedOutputParamsCount]);
@@ -3294,13 +3300,15 @@ begin
   result := 0;
   Call.Init(getURIID(tableIndex,0),'POST',json);
   URI(Call);
-  if Call.OutStatus<>HTTP_CREATED then begin
+  if Call.OutStatus<>HTTP_CREATED then
+  begin
     Log(sllError,'Error creating %s with %s',[Model.Info[tableIndex].Name,json]);
     exit;
   end;
   location := GetOutHeader(Call,'location');
   for i := length(location) downto 1 do
-    if not (ord(location[i]) in [ord('0')..ord('9')]) then begin
+    if not (ord(location[i]) in [ord('0')..ord('9')]) then
+    begin
       result := StrToInt64Def(Copy(location,i+1,length(location)),0);
       break; // 'Location: root/People/11012' e.g.
     end;
@@ -3741,7 +3749,8 @@ end;
 function BlobToVariant(const Blob: TSQLRawBlob): variant;
 begin
   if Blob=nil then
-    result := null else
+    result := null
+  else
     result := BytesToBase64JSONString(Blob);
 end;
 
