@@ -786,6 +786,9 @@ type
     // - FieldNames='' retrieve simple fields, '*' all fields, or as specified
     function RetrieveList(Table: TSQLRecordClass; const FieldNames,
       SQLWhere: string; const BoundsSQLWhere: array of const): TObjectList; overload;
+
+    procedure RetrieveIDs(AClass : TSQLRecordClass; const SQLWhere: string;
+                const BoundsSQLWhere: array of const; var oRes : TIDDynArray); overload;
     /// execute directly a SQL statement, returning a list of data rows or nil
     function ExecuteList(const SQL: string): TSQLTableJSON; virtual; abstract;
     {$ifdef ISDELPHI2010} // Delphi 2009 generics support is buggy :(
@@ -793,7 +796,10 @@ type
     // - you can bind parameters by using ? in the SQLWhere clause
     // - use DateTimeToSQL() for date/time database fields
     // - FieldNames='' retrieve simple fields, '*' all fields, or as specified
-    function RetrieveList<T: TSQLRecord>(const FieldNames, SQLWhere: string; const BoundsSQLWhere: array of const): TObjectList<T>; overload;
+    function RetrieveList<T: TSQLRecord>(const FieldNames, SQLWhere: string;
+                const BoundsSQLWhere: array of const): TObjectList<T>; overload;
+    procedure RetrieveIDs(AClass : TSQLRecordClass; const SQLWhere: string;
+                const BoundsSQLWhere: array of const; oRes : TList<TID>); overload;
     {$endif}
 
     /// create a new member, returning the newly created ID, or 0 on error
@@ -2343,8 +2349,11 @@ function TSQLRest.Retrieve(const FieldNames,SQLWhere: string;
   const BoundsSQLWhere: array of const; Value: TSQLRecord): boolean;
 var table: TSQLTableJSON;
 begin
-  table := MultiFieldValues(Value.RecordClass,FieldNames,
-    SQLWhere,BoundsSQLWhere,true);
+  table := MultiFieldValues(Value.RecordClass,
+                            FieldNames,
+                            SQLWhere,
+                            BoundsSQLWhere,
+                            true);
   if table=nil then
     result := false 
   else
@@ -2352,6 +2361,32 @@ begin
     result := table.FillOne(Value);
   finally
     table.Free;
+  end;
+end;
+
+procedure TSQLRest.RetrieveIDs(AClass: TSQLRecordClass; const SQLWhere: string; const BoundsSQLWhere: array of const;
+  var oRes: TIDDynArray);
+var
+  vRows: TSQLTableJSON;
+  vLength : Integer;
+begin
+  vRows := MultiFieldValues(AClass,
+                            'ID',
+                            SQLWhere,
+                            BoundsSQLWhere);
+  vLength := 0;
+  SetLength(oRes, vLength);
+  if vRows<>nil then
+  try
+    repeat
+      if not vRows.Step(false) then
+        break;
+      SetLength(oRes, vLength+1);
+      oRes[vLength] := vRows.Value['ID'];
+      inc(vLength);
+    until false;
+  finally
+    vRows.Free;
   end;
 end;
 
@@ -2363,7 +2398,10 @@ begin
   {$ifndef ISSMS} // result is already created as "array of TObject"
   result := TObjectList.Create;
   {$endif ISSMS}
-  rows := MultiFieldValues(Table,FieldNames,SQLWhere,BoundsSQLWhere);
+  rows := MultiFieldValues(Table,
+                           FieldNames,
+                           SQLWhere,
+                           BoundsSQLWhere);
   if rows<>nil then
   try
     repeat
@@ -2383,25 +2421,54 @@ end;
 {$ifdef ISDELPHI2010}
 function TSQLRest.RetrieveList<T>(const FieldNames, SQLWhere: string;
   const BoundsSQLWhere: array of const): TObjectList<T>;
-var rows: TSQLTableJSON;
-    rec: TSQLRecord;
+var vRows: TSQLTableJSON;
+    vRec: TSQLRecord;
 begin
   result := TObjectList<T>.Create; // TObjectList<T> will free each T instance
-  rows := MultiFieldValues(TSQLRecordClass(T),FieldNames,SQLWhere,BoundsSQLWhere);
-  if rows<>nil then
+  vRows := MultiFieldValues(TSQLRecordClass(T),
+                            FieldNames,
+                            SQLWhere,
+                            BoundsSQLWhere);
+  if vRows<>nil then
   try
     repeat
-      rec := TSQLRecordClass(T).Create;
-      if not rows.FillOne(rec) then begin
-        rec.Free;
+      vRec := TSQLRecordClass(T).Create;
+      if not vRows.FillOne(vRec) then
+      begin
+        vRec.Free;
         break;
       end;
-      result.Add(rec);
+      result.Add(vRec);
     until false;
   finally
-    rows.Free;
+    vRows.Free;
   end;
 end;
+
+procedure TSQLRest.RetrieveIDs(AClass : TSQLRecordClass; const SQLWhere: string;
+                const BoundsSQLWhere: array of const; oRes : TList<TID>);
+var
+  vRows: TSQLTableJSON;
+  vID : TID;
+begin
+  oRes.Clear;
+  vRows := MultiFieldValues(AClass,
+                            'ID',
+                            SQLWhere,
+                            BoundsSQLWhere);
+  if vRows<>nil then
+  try
+    repeat
+      if not vRows.Step(false) then
+        break;
+      vID := vRows.Value['ID'];
+      oRes.Add(vID);
+    until false;
+  finally
+    vRows.Free;
+  end;
+end;
+
 {$endif ISDELPHI2010}
 
 function TSQLRest.Add(Value: TSQLRecord; SendData, ForceID: boolean;
