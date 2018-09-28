@@ -6333,7 +6333,7 @@ type
     Session: cardinal;
     /// the corresponding TAuthSession.User.GroupRights.ID value
     // - is undefined if Session is 0 or 1 (no authentication running)
-    SessionGroup: integer;
+    SessionGroup: TID;
     /// the corresponding TAuthSession.User.ID value
     // - is undefined if Session is 0 or 1 (no authentication running)
     SessionUser: TID;
@@ -37036,16 +37036,17 @@ var Tix: cardinal;
 begin
   Tix := GetTickCount shr 9; // resolution change 1 ms -> 512 ms
   if fServerTimestampCacheTix=Tix then
-    result := fServerTimestampCacheValue.Value else begin
+    result := fServerTimestampCacheValue.Value else
+  begin
     fServerTimestampCacheTix := Tix;
-    fServerTimestampCacheValue.From(NowUTC+fServerTimestampOffset);
+    fServerTimestampCacheValue.From(Now{UTC}+fServerTimestampOffset);
     result := fServerTimestampCacheValue.Value;
   end;
 end;
 
 procedure TSQLRest.SetServerTimestamp(const Value: TTimeLog);
 begin
-  fServerTimestampOffset := PTimeLogBits(@Value)^.ToDateTime-NowUTC;
+  fServerTimestampOffset := PTimeLogBits(@Value)^.ToDateTime-Now{UTC};
   if fServerTimestampOffset=0 then
     fServerTimestampOffset := 0.000001; // retrieve server date/time only once
 end;
@@ -40943,7 +40944,8 @@ end;
 var Method: TThreadMethod;
     Start64: Int64;
 begin
-  with Server.fAcquireExecution[Command] do begin
+  with Server.fAcquireExecution[Command] do
+  begin
     case Command of
       execSOAByMethod:
         Method := ExecuteSOAByMethod;
@@ -40951,15 +40953,18 @@ begin
         Method := ExecuteSOAByInterface;
       execORMGet:
         Method := ExecuteORMGet;
-      execORMWrite: begin // special behavior to handle transactions at writing
+      execORMWrite:
+      begin // special behavior to handle transactions at writing
         Method := ExecuteORMWrite;
         Start64 := GetTickCount64;
         repeat
           if Safe.TryLock then
           try
             if (Server.fTransactionActiveSession=0) or // avoid transaction mixups
-               (Server.fTransactionActiveSession=Session) then begin
-              if Mode=amLocked then begin
+               (Server.fTransactionActiveSession=Session) then
+            begin
+              if Mode=amLocked then
+              begin
                 ExecuteORMWrite; // process within the obtained write mutex
                 exit;
               end;
@@ -40968,7 +40973,8 @@ begin
           finally
             Safe.UnLock;
           end;
-          if (LockedTimeOut<>0) and (GetTickCount64>Start64+LockedTimeOut) then begin
+          if (LockedTimeOut<>0) and (GetTickCount64>Start64+LockedTimeOut) then
+          begin
             TimeOut; // wait up to 5 second by default
             exit;
           end;
@@ -41014,13 +41020,14 @@ begin
     amMainThread:
       BackgroundExecuteThreadMethod(Method,nil);
     {$endif}
-    amBackgroundThread,amBackgroundORMSharedThread: begin
+    amBackgroundThread,amBackgroundORMSharedThread:
+    begin
       if Thread=nil then
         Thread := Server.NewBackgroundThreadMethod('% "%" %',
           [self,Server.Model.Root,ToText(Command)^]);
       BackgroundExecuteThreadMethod(Method,Thread);
     end;
-    end;
+  end;
 end;
 
 procedure TSQLRestServerURIContext.ConfigurationRestMethod(SettingsStorage: TObject);
@@ -42666,17 +42673,20 @@ begin
     {$endif}
     Ctxt.SafeProtocolID := safeID;
     if fShutdownRequested then
-      Ctxt.Error('Server is shutting down',HTTP_UNAVAILABLE) else
-    if Ctxt.Method=mNone then
-      Ctxt.Error('Unknown Verb %',[Call.Method]) else
-    if (fIPBan<>nil) and fIPBan.Exists(Ctxt.RemoteIP) then
-      Ctxt.Error('Banned IP %',[Ctxt.fRemoteIP]) else
+      Ctxt.Error('Server is shutting down',HTTP_UNAVAILABLE)
+    else if Ctxt.Method=mNone then
+      Ctxt.Error('Unknown Verb %',[Call.Method])
+    else if (fIPBan<>nil) and fIPBan.Exists(Ctxt.RemoteIP) then
+      Ctxt.Error('Banned IP %',[Ctxt.fRemoteIP])
+    else
     // 1. decode URI
     if not Ctxt.URIDecodeREST then
-      Ctxt.Error('Invalid Root',HTTP_NOTFOUND) else
-    if (RootRedirectGet<>'') and (Ctxt.Method=mGet) and
+      Ctxt.Error('Invalid Root',HTTP_NOTFOUND)
+    else if (RootRedirectGet<>'') and (Ctxt.Method=mGet) and
        (Call.Url=Model.Root) and (Call.InBody='') then
-      Ctxt.Redirect(RootRedirectGet) else begin
+      Ctxt.Redirect(RootRedirectGet)
+    else
+    begin
       Ctxt.URIDecodeSOAByMethod;
       if (Ctxt.MethodIndex<0) and (Ctxt.URI<>'') then
         Ctxt.URIDecodeSOAByInterface;
@@ -42684,15 +42694,16 @@ begin
       if (rsoSecureConnectionRequired in fOptions) and
          (Ctxt.MethodIndex<>fPublishedMethodTimestampIndex) and
          not (llfSecured in Call.LowLevelFlags) then
-        Ctxt.AuthenticationFailed(afSecureConnectionRequired) else
-      if not Ctxt.Authenticate then
-        Ctxt.AuthenticationFailed(afInvalidSignature) else
-      if (Ctxt.Service<>nil) and
+        Ctxt.AuthenticationFailed(afSecureConnectionRequired)
+      else if not Ctxt.Authenticate then
+        Ctxt.AuthenticationFailed(afInvalidSignature)
+      else if (Ctxt.Service<>nil) and
           not (reService in Call.RestAccessRights^.AllowRemoteExecute) then
         if (rsoRedirectForbiddenToAuth in Options) and (Ctxt.ClientKind=ckAjax) then
-          Ctxt.Redirect(Model.Root+'/auth') else
-          Ctxt.AuthenticationFailed(afRemoteServiceExecutionNotAllowed) else
-      if (Ctxt.Session<>CONST_AUTHENTICATION_NOT_USED) or
+          Ctxt.Redirect(Model.Root+'/auth')
+        else
+          Ctxt.AuthenticationFailed(afRemoteServiceExecutionNotAllowed)
+      else if (Ctxt.Session<>CONST_AUTHENTICATION_NOT_USED) or
          (fJWTForUnauthenticatedRequest=nil) or
          (Ctxt.MethodIndex=fPublishedMethodTimestampIndex) or
          ((llfSecured in Call.LowLevelFlags) and
@@ -42702,13 +42713,15 @@ begin
       try
         if Ctxt.MethodIndex>=0 then
           if Ctxt.MethodIndex=fPublishedMethodBatchIndex then
-            Ctxt.Command := execORMWrite else
-            Ctxt.Command := execSOAByMethod else
-        if Ctxt.Service<>nil then
-          Ctxt.Command := execSOAByInterface else
-        if Ctxt.Method in [mLOCK,mGET,mUNLOCK,mSTATE] then
+            Ctxt.Command := execORMWrite
+          else
+            Ctxt.Command := execSOAByMethod
+        else if Ctxt.Service<>nil then
+          Ctxt.Command := execSOAByInterface
+        else if Ctxt.Method in [mLOCK,mGET,mUNLOCK,mSTATE] then
           // handle read methods
-          Ctxt.Command := execORMGet else
+          Ctxt.Command := execORMGet
+        else
           // write methods (mPOST, mPUT, mDELETE...)
           Ctxt.Command := execORMWrite;
         if not Assigned(OnBeforeURI) or OnBeforeURI(Ctxt) then
@@ -42722,9 +42735,11 @@ begin
       end;
     end;
     // 4. returns expected result to the client and update Server statistics
-    if StatusCodeIsSuccess(Call.OutStatus) then begin
+    if StatusCodeIsSuccess(Call.OutStatus) then
+    begin
       outcomingfile := false;
-      if Call.OutBody<>'' then begin
+      if Call.OutBody<>'' then
+      begin
         len := length(Call.OutHead);
         outcomingfile := (len>=25) and (Call.OutHead[15]='!') and
           IdemPChar(pointer(Call.OutHead),STATICFILE_CONTENT_TYPE_HEADER_UPPPER);
@@ -42733,7 +42748,8 @@ begin
            (rsoHttp200WithNoBodyReturns204 in fOptions) then
           Call.OutStatus := HTTP_NOCONTENT;
       fStats.ProcessSuccess(outcomingfile);
-    end else begin
+    end else
+    begin
       fStats.ProcessErrorNumber(Call.OutStatus);
       if Call.OutBody='' then // if no custom error message, compute it now as JSON
         Ctxt.Error(Ctxt.CustomErrorMsg,Call.OutStatus);
@@ -42744,10 +42760,12 @@ begin
     else if (Ctxt.Static<>nil) and Ctxt.Static.InheritsFrom(TSQLRestStorage) and
        TSQLRestStorage(Ctxt.Static).fOutInternalStateForcedRefresh then
       // force always refresh for Static table which demands it
-      Call.OutInternalState := cardinal(-1) else
+      Call.OutInternalState := cardinal(-1)
+    else
       // database state may have changed above
       Call.OutInternalState := InternalState;
-    if Ctxt.OutSetCookie<>'' then begin
+    if Ctxt.OutSetCookie<>'' then
+    begin
       Call.OutHead := Trim(Call.OutHead+#13#10'Set-Cookie: '+Ctxt.OutSetCookie);
       if rsoCookieIncludeRootPath in fOptions then
         Call.OutHead := Call.OutHead+'; Path=/'; // case-sensitive Path=/ModelRoot
@@ -42789,9 +42807,11 @@ begin
   end;
   if safeid<>0 then
     InternalSafeProtocol(Call,safeid); // encrypt Call.OutBody+OutHead
-  if Assigned(OnIdle) then begin
+  if Assigned(OnIdle) then
+  begin
     elapsed := GetTickCount64 shr 7; // trigger every 128 ms
-    if elapsed<>fOnIdleLastTix then begin
+    if elapsed<>fOnIdleLastTix then
+    begin
       OnIdle(self);
       fOnIdleLastTix := elapsed;
     end;
@@ -43311,9 +43331,11 @@ var i: integer;
     tix, session: cardinal;
     sessions: ^TAuthSession;
 begin // caller of RetrieveSession() made fSessions.Safe.Lock
-  if (self<>nil) and (fSessions<>nil) then begin
+  if (self<>nil) and (fSessions<>nil) then
+  begin
     tix := GetTickCount64 shr 10;
-    if tix<>fSessionsDeprecatedTix then begin
+    if tix<>fSessionsDeprecatedTix then
+    begin
       fSessionsDeprecatedTix := tix; // check deprecated sessions every second
       for i := fSessions.Count-1 downto 0 do
         if tix>TAuthSession(fSessions.List[i]).TimeOutTix then
@@ -43323,7 +43345,8 @@ begin // caller of RetrieveSession() made fSessions.Safe.Lock
     sessions := pointer(fSessions.List);
     session := Ctxt.Session;
     for i := 1 to fSessions.Count do
-      if sessions^.IDCardinal=session then begin
+      if sessions^.IDCardinal=session then
+      begin
         result := sessions^;
         result.fTimeOutTix := tix+result.TimeoutShr10;
         Ctxt.fSession := result; // for TSQLRestServer internal use
@@ -43352,8 +43375,10 @@ begin
   try
     for i := 0 to fSessions.Count-1 do
       with TAuthSession(fSessions.List[i]) do
-      if IDCardinal=aSessionID then begin
-        if User<>nil then begin
+      if IDCardinal=aSessionID then
+      begin
+        if User<>nil then
+        begin
           result := User.CreateCopy as fSQLAuthUserClass;
           result.GroupRights := nil;
         end;
@@ -53377,8 +53402,11 @@ begin
   if (err<>0) or (UserID<=0) or not (saoUserByLogonOrID in fOptions) then
     UserID := 0;
   if Assigned(fServer.OnAuthenticationUserRetrieve) then
-    result := fServer.OnAuthenticationUserRetrieve(self,Ctxt,UserID,aUserName) else begin
-    if UserID<>0 then begin // try if TSQLAuthUser.ID was transmitted
+    result := fServer.OnAuthenticationUserRetrieve(self,Ctxt,UserID,aUserName)
+  else
+  begin
+    if UserID<>0 then
+    begin // try if TSQLAuthUser.ID was transmitted
       result := fServer.fSQLAuthUserClass.Create(fServer,UserID); // may use ORM cache :)
       if result.fID=0 then
         FreeAndNil(result);
@@ -53393,11 +53421,12 @@ begin
         result.DisplayName := aUserName;
       end;
   end;
-  if (result=nil) or (result.fID=0) then begin
+  if (result=nil) or (result.fID=0) then
+  begin
     fServer.InternalLog('%.LogonName=% not found',[fServer.fSQLAuthUserClass,aUserName],sllUserAuth);
     FreeAndNil(result);
-  end else
-  if not result.CanUserLog(Ctxt) then begin
+  end else if not result.CanUserLog(Ctxt) then
+  begin
     fServer.InternalLog('%.CanUserLog(%) returned FALSE -> rejected',[result,aUserName],sllUserAuth);
     FreeAndNil(result);
   end;
@@ -53411,7 +53440,14 @@ begin
   try // now client is authenticated -> create a session
     fServer.SessionCreate(User,Ctxt,Session); // call Ctxt.AuthenticationFailed on error
     if Session<>nil then
+    begin
+      Ctxt.fSession := Session;
+      Ctxt.Session := Session.fIDCardinal;
+      Ctxt.SessionUser := Session.fUser.ID;
+      Ctxt.SessionUserName := Session.fUser.LogonName;
+      Ctxt.SessionGroup := Session.fUser.GroupRights.ID;
       SessionCreateReturns(Ctxt,Session,Session.fPrivateSalt,'','');
+    end;
   finally
     User.Free;
   end;
@@ -53734,14 +53770,16 @@ begin
   aUserName := Ctxt.InputUTF8OrVoid['UserName'];
   aPassWord := Ctxt.InputUTF8OrVoid['Password'];
   aClientNonce := Ctxt.InputUTF8OrVoid['ClientNonce'];
-  if (aUserName<>'') and (length(aClientNonce)>32) then begin
+  if (aUserName<>'') and (length(aClientNonce)>32) then
+  begin
     // GET ModelRoot/auth?UserName=...&PassWord=...&ClientNonce=... -> handshaking
     User := GetUser(Ctxt,aUserName);
     if User<>nil then
     try
       // check if match TSQLRestClientURI.SetUser() algorithm
       if CheckPassword(Ctxt,User,aClientNonce,aPassWord) then
-        SessionCreate(Ctxt,User) else // will call Ctxt.AuthenticationFailed on error
+        SessionCreate(Ctxt,User)
+      else // will call Ctxt.AuthenticationFailed on error
         Ctxt.AuthenticationFailed(afInvalidPassword);
     finally
       User.Free;
@@ -53801,7 +53839,8 @@ begin
     exit;
   U := GetUser(Ctxt,aUserName);
   if U=nil then
-    Ctxt.AuthenticationFailed(afUnknownUser) else
+    Ctxt.AuthenticationFailed(afUnknownUser)
+  else
     SessionCreate(Ctxt,U); // call Ctxt.AuthenticationFailed on error
 end;
 
@@ -53939,12 +53978,14 @@ var userPass,user,pass: RawUTF8;
     U: TSQLAuthUser;
     Session: TAuthSession;
 begin
-  if Ctxt.InputExists['UserName'] then begin
+  if Ctxt.InputExists['UserName'] then
+  begin
     result := false; // allow other schemes to check this request
     exit;
   end;
   result := true; // this authentication method is exclusive to any other
-  if GetUserPassFromInHead(Ctxt,userPass,user,pass) then begin
+  if GetUserPassFromInHead(Ctxt,userPass,user,pass) then
+  begin
     U := GetUser(Ctxt,user);
     if U<>nil then
     try
