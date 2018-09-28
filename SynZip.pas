@@ -590,6 +590,39 @@ function get_crc_table: pointer; cdecl;
 {$endif USEINLINEASM}
 {$endif USEPASZLIB}
 
+type
+  /// simple wrapper class to decompress a .gz file into memory or stream/file
+  TGZRead = object
+  private
+    comp, zsdest: pointer;
+    zscrc: cardinal;
+    zssize, zscode: integer;
+    zs: TZStream;
+  public
+    complen, uncomplen: integer;
+    crc32: cardinal;
+    unixmodtime: cardinal;
+    fname, fcomment, extra: PAnsiChar;
+    /// read and validate the .gz header
+    // - on success, return true and fill complen/uncomplen/crc32c properties
+    function Init(gz: PAnsiChar; gzLen: integer): boolean;
+    /// uncompress the .gz content into a memory buffer
+    function ToMem: ZipString;
+    /// uncompress the .gz content into a stream
+    function ToStream(stream: TStream; tempBufSize: integer=0): boolean;
+    /// uncompress the .gz content into a file
+    function ToFile(const filename: TFileName; tempBufSize: integer=0): boolean;
+    /// allow low level iterative decompression using an internal TZStream structure
+    function ZStreamStart(dest: pointer; destsize: integer): boolean;
+    /// will uncompress into dest/destsize buffer as supplied to ZStreamStart
+    // - return the number of bytes uncompressed, 0 if the input stream is finished
+    function ZStreamNext: integer;
+    /// any successfull call to ZStreamStart should always run ZStreamDone
+    // - return true if the crc and the uncompressed size are ok
+    function ZStreamDone: boolean;
+  end;
+
+
 /// uncompress a .gz file content
 // - return '' if the .gz content is invalid (e.g. bad crc)
 function GZRead(gz: PAnsiChar; gzLen: integer): ZipString;
@@ -1594,27 +1627,148 @@ end;
 const
   GZHEAD: array [0..2] of cardinal = ($088B1F,0,0);
   GZHEAD_SIZE = 10;
+type
+  TGZFlags = set of (gzfText, gzfHCRC, gzfExtra, gzfName, gzfComment);
 
-function GZRead(gz: PAnsiChar; gzLen: integer): ZipString;
-var Offset,Len: integer;
-begin
-  result := '';
+{ TGZRead }
+
+function TGZRead.Init(gz: PAnsiChar; gzLen: integer): boolean;
+var offset: integer;
+    flags: TGZFlags;
+begin // see https://www.ietf.org/rfc/rfc1952.txt
+  comp := nil;
+  complen := 0;
+  uncomplen := 0;
+  zsdest := nil;
+  result := false;
+  extra := nil;
+  fname := nil;
+  fcomment := nil;
   if (gz=nil) or (gzLen<=18) or (PCardinal(gz)^ and $ffffff<>GZHEAD[0]) then
     exit; // .gz file as header + compressed + crc32 + len32 format
-  Offset := GZHEAD_SIZE;
-  if gz[3]=#8 then begin // FNAME flag (as created e.g. by 7Zip)
-    while (Offset<gzlen) and (gz[offset]<>#0) do
-      inc(Offset);
-    if Offset<gzlen then
-      inc(Offset);
+  flags := TGZFlags(gz[3]);
+  unixmodtime := PCardinal(gz+4)^;
+  offset := GZHEAD_SIZE;
+  if gzfExtra in flags then begin
+    extra := gz+offset;
+    inc(offset,PWord(extra)^+SizeOf(word));
   end;
-  Len := pInteger(@gz[gzLen-4])^;
-  if Len=0 then
+  if gzfName in flags then begin // FNAME flag (as created e.g. by 7Zip)
+    fname := gz+offset;
+    while (offset<gzlen) and (gz[offset]<>#0) do
+      inc(offset);
+    inc(offset);
+  end;
+  if gzfComment in flags then begin
+    fcomment := gz+offset;
+    while (offset<gzlen) and (gz[offset]<>#0) do
+      inc(offset);
+    inc(offset);
+  end;
+  if gzfHCRC in flags then
+    if PWord(gz+offset)^<>SynZip.crc32(0,gz,offset) and $ffff then
+      exit
+    else
+      inc(offset,SizeOf(word));
+  if offset>=gzlen-8 then
     exit;
-  SetLength(result,Len);
-  if (UnCompressMem(@gz[Offset],pointer(result),gzLen-Offset-8,Len)<>Len) or
-     (SynZip.crc32(0,pointer(result),Len)<>PCardinal(@gz[gzLen-8])^) then
+  uncomplen := PInteger(@gz[gzLen-4])^;
+  if uncomplen<=0 then
+    exit;
+  comp := gz+offset;
+  complen := gzLen-offset-8;
+  crc32 := PCardinal(@gz[gzLen-8])^;
+  result := true;
+end;
+
+function TGZRead.ToMem: ZipString;
+begin
+  result := '';
+  if comp=nil then
+    exit;
+  SetLength(result,uncomplen);
+  if (UnCompressMem(comp,pointer(result),complen,uncomplen)<>uncomplen) or
+     (SynZip.crc32(0,pointer(result),uncomplen)<>crc32) then
     result := ''; // invalid CRC
+end;
+
+function TGZRead.ToStream(stream: TStream; tempBufSize: integer): boolean;
+var crc: cardinal;
+begin
+  crc := 0;
+  result := (comp<>nil) and (stream<>nil) and
+    (UnCompressStream(comp,complen,stream,@crc,{zlib=}false,tempBufSize)=cardinal(uncomplen)) and
+    (crc=crc32);
+end;
+
+function TGZRead.ToFile(const filename: TFileName; tempBufSize: integer): boolean;
+var f: TStream;
+begin
+  result := false;
+  if (comp=nil) or (filename='') then
+    exit;
+  f := TFileStream.Create(filename,fmCreate);
+  try
+    result := ToStream(f,tempBufSize);
+  finally
+    f.Free;
+  end;
+end;
+
+function TGZRead.ZStreamStart(dest: pointer; destsize: integer): boolean;
+begin
+  result := false;
+  zscode := Z_STREAM_ERROR;
+  if (comp=nil) or (dest=nil) or (destsize<=0) then
+    exit;
+  StreamInit(zs);
+  zs.next_in := comp;
+  zs.avail_in := complen;
+  zs.next_out := dest;
+  zs.avail_out := destsize;
+  zscode := inflateInit2_(zs, -MAX_WBITS, ZLIB_VERSION, sizeof(zs));
+  if zscode>=0 then begin
+    zscrc := 0;
+    zsdest := dest;
+    zssize := destsize;
+    result := true;
+  end;
+end;
+
+function TGZRead.ZStreamNext: integer;
+begin
+  result := 0;
+  if (comp=nil) or (zsdest=nil) or (integer(zs.total_out)>uncomplen) or
+     not ((zscode=Z_OK) or (zscode=Z_STREAM_END) or (zscode=Z_BUF_ERROR)) then
+    exit;
+  if zscode<>Z_STREAM_END then begin
+    zscode := Check(inflate(zs, Z_FINISH),[Z_OK,Z_STREAM_END,Z_BUF_ERROR],'ZStreamNext');
+    result := zssize-integer(zs.avail_out);
+    if result=0 then
+      exit;
+    zscrc := SynZip.crc32(zscrc,zsdest,result);
+    zs.next_out := zsdest;
+    zs.avail_out := zssize;
+  end;
+end;
+
+function TGZRead.ZStreamDone: boolean;
+begin
+  result := false;
+  if (comp<>nil) and (zsdest<>nil) then begin
+    inflateEnd(zs);
+    zsdest := nil;
+    result := (zscrc=crc32) and (integer(zs.total_out)=uncomplen);
+  end;
+end;
+
+
+function GZRead(gz: PAnsiChar; gzLen: integer): ZipString;
+var gzr: TGZRead;
+begin
+  if gzr.Init(gz,gzlen) then
+    result := gzr.ToMem else
+    result := '';
 end;
 
 function GZFile(const orig, destgz: TFileName; CompressionLevel: Integer=6): boolean;
@@ -5163,7 +5317,7 @@ begin
   if inflateInit2_(strm, Bits, ZLIB_VERSION, sizeof(strm))>=0 then
   try
     repeat
-      code := Check(inflate(strm, Z_FINISH),[Z_OK,Z_STREAM_END,Z_BUF_ERROR],'UnCompressStream');
+      code := Check(inflate(strm, Z_FINISH),[Z_OK,Z_STREAM_END,Z_BUF_ERROR],'UnCompressZipString');
       FlushBuf;
     until code=Z_STREAM_END;
     FlushBuf;

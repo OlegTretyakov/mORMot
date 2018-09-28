@@ -4793,6 +4793,8 @@ const
   HTTP_PROXYAUTHREQUIRED = 407;
   /// HTTP Status Code for "Request Time-out"
   HTTP_TIMEOUT = 408;
+  /// HTTP Status Code for "Conflict"
+  HTTP_CONFLICT = 409;
   /// HTTP Status Code for "Payload Too Large"
   HTTP_PAYLOADTOOLARGE = 413;
   /// HTTP Status Code for "Internal Server Error"
@@ -6145,7 +6147,6 @@ type
     {$ifndef NOVARIANTS}
     function GetInput(const ParamName: RawUTF8): variant;
     function GetInputOrVoid(const ParamName: RawUTF8): variant;
-    function GetInputAsTDocVariant: variant;
     {$endif}
     function GetInputNameIndex(const ParamName: RawUTF8): integer;
     function GetInputExists(const ParamName: RawUTF8): Boolean;
@@ -6452,13 +6453,14 @@ type
     // - returns Unassigned if no parameter was defined
     // - returns a JSON object with input parameters encoded as
     // ! {"name1":value1,"name2":value2...}
+    // - optionally with a PServiceMethod information about the actual values types
     // - if the parameters were encoded as multipart, the JSON object
     // will be encoded with its textual values, or with nested objects, if
     // the data was supplied as binary:
     // ! {"name1":{"data":..,"filename":...,"contenttype":...},"name2":...}
     // since name1.data will be Base64 encoded, so you should better
     // use the InputAsMultiPart() method instead when working with binary
-    property InputAsTDocVariant: variant read GetInputAsTDocVariant;
+    function GetInputAsTDocVariant(const Options: TDocVariantOptions; ServiceMethod: pointer): variant;
     {$endif}
     /// decode any multipart/form-data POST request input
     // - returns TRUE and set MultiPart array as expected, on success
@@ -12590,6 +12592,10 @@ type
   TOnServiceCanExecute = function(Ctxt: TSQLRestServerURIContext;
     const Method: TServiceMethod): boolean of object;
 
+  /// callbacked used by TServiceFactoryServer.RunOnAllInstances method
+  TOnServiceFactoryServerOne = function(Sender: TServiceFactoryServer;
+    var Instance: TServiceFactoryServerInstance; var Opaque): integer of object;
+
   /// a service provider implemented on the server side
   // - each registered interface has its own TServiceFactoryServer instance,
   // available as one TSQLServiceContainerServer item from TSQLRest.Services property
@@ -12600,7 +12606,7 @@ type
   protected
     fInstances: TServiceFactoryServerInstanceDynArray;
     fInstance: TDynArray;
-    fInstanceCapacity: integer;
+    fInstanceCapacity: integer; // some void entries may have P^.InstanceID=0
     fInstanceCount: integer;
     fInstanceCurrentID: TID;
     fInstanceTimeOut: cardinal;
@@ -12821,6 +12827,10 @@ type
     // will be able to retrieve it only if TServiceContainerServer.PublishSignature
     // is set to TRUE (which is not the default setting, for security reasons)
     function RetrieveSignature: RawUTF8; override;
+    /// call the supplied aEvent callback for all class instances implementing
+    // this service
+    function RunOnAllInstances(const aEvent: TOnServiceFactoryServerOne;
+      var aOpaque): integer;
 
     /// just type-cast the associated TSQLRest instance to a true TSQLRestServer
     function RestServer: TSQLRestServer;
@@ -31232,8 +31242,7 @@ var j: integer;
     PS: PShortString;
 begin
   W.Add('[');
-  if FullSetsAsStar and (MaxValue<32) and
-     GetAllBits(Value,MaxValue+1) then
+  if FullSetsAsStar and (MaxValue in [1..31]) and GetAllBits(Value,MaxValue+1) then
     W.AddShort('"*"') else begin
     PS := @NameList;
     for j := MinValue to MaxValue do begin
@@ -31257,8 +31266,7 @@ var j: integer;
     arr: TDocVariantData;
 begin
   arr.InitFast;
-  if FullSetsAsStar and (MaxValue<32) and
-     GetAllBits(Value,MaxValue+1) then
+  if FullSetsAsStar and (MaxValue in [1..31]) and GetAllBits(Value,MaxValue+1) then
     arr.AddItem('*') else begin
     PS := @NameList;
     for j := MinValue to MaxValue do begin
@@ -41906,23 +41914,33 @@ begin
     GetVariantFromJSON(pointer(ValueUTF8),false,Value);
 end;
 
-function TSQLRestServerURIContext.GetInputAsTDocVariant: variant;
-var ndx: integer;
+function TSQLRestServerURIContext.GetInputAsTDocVariant(const Options: TDocVariantOptions; 
+  ServiceMethod: pointer): variant;
+var ndx, a: PtrInt;
+    forcestring: boolean;
     v: variant;
     MultiPart: TMultiPartDynArray;
+    name: RawUTF8;
+    met: PServiceMethod absolute ServiceMethod;
     res: TDocVariantData absolute result;
 begin
   VarClear(result);
   FillInput;
   if fInput<>nil then begin
-    res.InitFast;
+    res.Init(Options,dvObject);
     for ndx := 0 to (length(fInput) shr 1)-1 do begin
-      GetVariantFromJSON(pointer(fInput[ndx*2+1]),false,v,@JSON_OPTIONS[true]);
-      res.AddValue(fInput[ndx*2],v);
+      name := fInput[ndx*2];
+      if met<>nil then begin
+        a := met.ArgIndex(pointer(name),length(name),{input=}true);
+        forcestring := (a>=0) and (vIsString  in met.Args[a].ValueKindAsm);
+      end else
+        forcestring := false;
+      GetVariantFromJSON(pointer(fInput[ndx*2+1]),forcestring,v,@Options);
+      res.AddValue(name,v);
     end;
   end else
   if InputAsMultiPart(MultiPart) then begin
-    res.InitFast;
+    res.Init(Options,dvObject);
     for ndx := 0 to high(MultiPart) do
       with MultiPart[ndx] do
         if ContentType=TEXT_CONTENT_TYPE then begin
@@ -59383,6 +59401,27 @@ begin
         P^.LastAccess64 := tix;
         inc(result);
       end;
+      inc(P);
+    end;
+  finally
+    LeaveCriticalSection(fInstanceLock);
+  end;
+end;
+
+function TServiceFactoryServer.RunOnAllInstances(const aEvent: TOnServiceFactoryServerOne;
+  var aOpaque): integer;
+var i: integer;
+    P: ^TServiceFactoryServerInstance;
+begin
+  result := 0;
+  if (self = nil) or not Assigned(aEvent) or (fInstanceCount=0) then
+    exit;
+  EnterCriticalSection(fInstanceLock);
+  try
+    P := pointer(fInstances);
+    for i := 1 to fInstanceCapacity do begin
+      if (P^.InstanceID<>0) and (P^.Instance<>nil) then
+        inc(result,aEvent(self,P^,aOpaque));
       inc(P);
     end;
   finally

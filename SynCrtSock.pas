@@ -5441,17 +5441,17 @@ begin
   if URI.From(aURI) then
     if URI.Https then
       {$ifdef USEWININET}
-      result := TWinHTTP.Get(aURI,inHeaders,true,outHeaders) else
+      result := TWinHTTP.Get(aURI,inHeaders,{weakCA=}true,outHeaders) else
       {$else}
       {$ifdef USELIBCURL}
-      result := TCurlHTTP.Get(aURI,inHeaders,true,outHeaders) else
+      result := TCurlHTTP.Get(aURI,inHeaders,{weakCA=}true,outHeaders) else
       {$else}
       raise ECrtSocket.CreateFmt('https is not supported by HttpGet(%s)',[aURI]) else
       {$endif}
       {$endif USEWININET}
       result := HttpGet(URI.Server,URI.Port,URI.Address,inHeaders,outHeaders) else
     result := '';
-  {$ifdef LINUX}
+  {$ifdef LINUX_RAWDEBUGVOIDHTTPGET}
   if result='' then
     writeln('HttpGet returned VOID for ',URI.server,':',URI.Port,' ',URI.Address);
   {$endif}
@@ -8546,25 +8546,25 @@ begin
             HttpAuthStatusFailure:
               Context.fAuthenticationStatus := hraFailed;
             end;
-        // retrieve body
-        if HTTP_REQUEST_FLAG_MORE_ENTITY_BODY_EXISTS and Req^.Flags<>0 then begin
-          with Req^.Headers.KnownHeaders[reqContentLength] do
-            InContentLength := GetCardinal(pRawValue,pRawValue+RawValueLength);
-          with Req^.Headers.KnownHeaders[reqContentEncoding] do
-            SetString(InContentEncoding,pRawValue,RawValueLength);
-          if (InContentLength>0) and (MaximumAllowedContentLength>0) and
-             (InContentLength>MaximumAllowedContentLength) then begin
-            SendError(STATUS_PAYLOADTOOLARGE,'Rejected');
+        with Req^.Headers.KnownHeaders[reqContentLength] do
+          InContentLength := GetCardinal(pRawValue,pRawValue+RawValueLength);
+        if (InContentLength>0) and (MaximumAllowedContentLength>0) and
+           (InContentLength>MaximumAllowedContentLength) then begin
+          SendError(STATUS_PAYLOADTOOLARGE,'Rejected');
+          continue;
+        end;
+        if Assigned(OnBeforeBody) then begin
+          with Context do
+            Err := OnBeforeBody(URL,Method,InHeaders,InContentType,RemoteIP,InContentLength,fUseSSL);
+          if Err<>STATUS_SUCCESS then begin
+            SendError(Err,'Rejected');
             continue;
           end;
-          if Assigned(OnBeforeBody) then begin
-            with Context do
-              Err := OnBeforeBody(URL,Method,InHeaders,InContentType,RemoteIP,InContentLength,fUseSSL);
-            if Err<>STATUS_SUCCESS then begin
-              SendError(Err,'Rejected');
-              continue;
-            end;
-          end;
+        end;
+        // retrieve body
+        if HTTP_REQUEST_FLAG_MORE_ENTITY_BODY_EXISTS and Req^.Flags<>0 then begin
+          with Req^.Headers.KnownHeaders[reqContentEncoding] do
+            SetString(InContentEncoding,pRawValue,RawValueLength);
           if InContentLength<>0 then begin
             SetLength(Context.fInContent,InContentLength);
             BufRead := pointer(Context.InContent);
