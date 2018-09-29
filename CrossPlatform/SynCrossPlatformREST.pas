@@ -2374,8 +2374,7 @@ begin
                             'ID',
                             SQLWhere,
                             BoundsSQLWhere);
-  vLength := 0;
-  SetLength(oRes, vLength);
+  vLength := Length(oRes);
   if vRows<>nil then
   try
     repeat
@@ -2451,7 +2450,6 @@ var
   vRows: TSQLTableJSON;
   vID : TID;
 begin
-  oRes.Clear;
   vRows := MultiFieldValues(AClass,
                             'ID',
                             SQLWhere,
