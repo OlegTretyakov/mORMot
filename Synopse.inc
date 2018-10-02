@@ -152,7 +152,7 @@
 // flag is available in Intel's CpuFeatures 
 // -> disabled by default, since in practice it is much slower for small blocks
 
-{.$define NOXPOWEREDNAME}
+{$define NOXPOWEREDNAME}
 // define this to avoid sending "X-Powered-By: Synopse mORMot" HTTP header
 
 {.$define SQLVIRTUALLOGS}
