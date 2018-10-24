@@ -105,30 +105,30 @@
     {$endif}
     {$if CompilerVersion >= 18}    // Delphi 2006 or newer
       {$define HASINLINE}
-    {$ifend}
+    {$endif}
     {$if CompilerVersion >= 21.0}
       {$define ISDELPHI2010}
-    {$ifend}
+    {$endif}
     {$if CompilerVersion >= 22.0}
       {$define ISDELPHIXE}
-    {$ifend}
+    {$endif}
     {$if CompilerVersion >= 23.0}
       {$define ISDELPHIXE2} // e.g. for Vcl.Graphics
       {$ifndef MSWINDOWS}
         {$define USETMONITOR}
       {$endif}
-    {$ifend}
+    {$endif}
     {$if CompilerVersion >= 25.0}
       {$define ISDELPHIXE4}
       {$ZEROBASEDSTRINGS OFF}      // we expect to share code among platforms
       {$warn DUPLICATE_CTOR_DTOR OFF} // avoid W1029 unneeded hints
-    {$ifend}
+    {$endif}
     {$if CompilerVersion >= 29.0}
       {$define ISDELPHIXE8} // e.g. for System.Net.HttpClient
-    {$ifend}
+    {$endif}
     {$if CompilerVersion >= 32.0}
       {$define ISDELPHI102} // e.g. for System.Net.URLClient.ResponseTimeout
-    {$ifend}
+    {$endif}
   {$else}
     {$define ISDELPHI5OROLDER}
     {$define USEOBJECTINSTEADOFRECORD}

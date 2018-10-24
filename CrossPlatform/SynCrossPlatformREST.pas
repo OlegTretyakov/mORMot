@@ -786,6 +786,9 @@ type
     // - FieldNames='' retrieve simple fields, '*' all fields, or as specified
     function RetrieveList(Table: TSQLRecordClass; const FieldNames,
       SQLWhere: string; const BoundsSQLWhere: array of const): TObjectList; overload;
+
+    procedure RetrieveIDs(AClass : TSQLRecordClass; const SQLWhere: string;
+                const BoundsSQLWhere: array of const; var oRes : TIDDynArray); overload;
     /// execute directly a SQL statement, returning a list of data rows or nil
     function ExecuteList(const SQL: string): TSQLTableJSON; virtual; abstract;
     {$ifdef ISDELPHI2010} // Delphi 2009 generics support is buggy :(
@@ -793,7 +796,10 @@ type
     // - you can bind parameters by using ? in the SQLWhere clause
     // - use DateTimeToSQL() for date/time database fields
     // - FieldNames='' retrieve simple fields, '*' all fields, or as specified
-    function RetrieveList<T: TSQLRecord>(const FieldNames, SQLWhere: string; const BoundsSQLWhere: array of const): TObjectList<T>; overload;
+    function RetrieveList<T: TSQLRecord>(const FieldNames, SQLWhere: string;
+                const BoundsSQLWhere: array of const): TObjectList<T>; overload;
+    procedure RetrieveIDs(AClass : TSQLRecordClass; const SQLWhere: string;
+                const BoundsSQLWhere: array of const; oRes : TList<TID>); overload;
     {$endif}
 
     /// create a new member, returning the newly created ID, or 0 on error
@@ -1361,8 +1367,7 @@ begin
         tmp := 'null' 
       else
       begin
-        tmp := VarRecToValue(
-          {$ifdef ISSMS}args{$else}BoundsSQLWhere{$endif}[arg],tmpIsString);
+        tmp := VarRecToValue(args[arg],tmpIsString);
         if tmpIsString then
           DoubleQuoteStr(tmp);
         inc(arg);
@@ -1375,7 +1380,7 @@ begin
   end;
   result := result+copy(SQLWhere,deb,i-deb);
 end;
-{$else}
+{$else ISSMS}
   maxArgs := high(BoundsSQLWhere);
   result := '';
   arg := 0;
@@ -1391,8 +1396,7 @@ end;
         tmp := 'null' 
       else
       begin
-        tmp := VarRecToValue(
-          {$ifdef ISSMS}args{$else}BoundsSQLWhere{$endif}[arg],tmpIsString);
+        tmp := VarRecToValue(BoundsSQLWhere[arg],tmpIsString);
         if tmpIsString then
           DoubleQuoteStr(tmp);
         inc(arg);
@@ -1405,7 +1409,7 @@ end;
   end;
   result := result+copy(SQLWhere,deb,i-deb);
 end;
-{$endif}
+{$endif ISSMS}
 
 function DateTimeToTTimeLog(Value: TDateTime): TTimeLog;
 var HH,MM,SS,MS,Y,M,D: word;
@@ -1417,10 +1421,10 @@ begin
   DecodeDate(Value,Y,M,D);
   {$ifdef ISSMS} // JavaScript truncates to 32 bit binary
   result := SS+MM*$40+(HH+D*$20+M*$400+Y*$4000-$420)*$1000;
-  {$else}
+  {$else ISSMS}
   V := HH+D shl 5+M shl 10+Y shl 14-(1 shl 5+1 shl 10);
   result := SS+MM shl 6+V shl 12;
-  {$endif}
+  {$endif ISSMS}
 end;
 
 function TTimeLogToDateTime(Value: TTimeLog): TDateTime;
@@ -1429,9 +1433,9 @@ var Y: cardinal;
 begin
   {$ifdef ISSMS} // JavaScript truncates to 32 bit binary
   Y := (Value div $4000000) and 4095;
-  {$else}
+  {$else ISSMS}
   Y := (Value shr (6+6+5+5+4)) and 4095;
-  {$endif}
+  {$endif ISSMS}
   if (Y=0) or not TryEncodeDate(Y,1+(Value shr (6+6+5+5)) and 15,
        1+(Value shr (6+6+5)) and 31,result) then
     result := 0;
@@ -1483,12 +1487,12 @@ const
     '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F');
 var i,c: integer;
     utf8: TUTF8Buffer; 
-{$endif}
+{$endif ISSMS}
 begin 
   {$ifdef ISSMS} 
   // see http://www.w3schools.com/jsref/jsref_encodeuricomponent.asp
   result := encodeURIComponent(aValue);
-  {$else}
+  {$else ISSMS}
    result := '';
   {$ifdef NEXTGEN}
   utf8 := TEncoding.UTF8.GetBytes(aValue);
@@ -1508,7 +1512,7 @@ begin
       result := result+'%'+HexChars[c shr 4]+HexChars[c and $F];
     end; // see rfc3986 2.3. Unreserved Characters
   end;
-  {$endif}
+  {$endif ISSMS}
 end;
 
 function UrlEncode(const aNameValueParameters: array of const): string; overload;
@@ -1516,10 +1520,10 @@ var n,a: integer;
     name,value: string;
     {$ifdef ISSMS}
     temp: variant;
-    {$else}
+    {$else ISSMS}
     wasString: Boolean;
     i: integer;
-    {$endif}
+    {$endif ISSMS}
 begin
   result := '';
 {$ifdef ISSMS} // open parameters are not a true array in JavaScript
@@ -1536,7 +1540,7 @@ begin
       result := result+'&'+name+'='+UrlEncode(value);
     end;
   end;
-{$else}
+{$else ISSMS}
   n := high(aNameValueParameters);
   if n>0 then
   begin
@@ -1551,7 +1555,7 @@ begin
       result := result+'&'+name+'='+UrlEncode(value);
     end;
   end;
-{$endif}
+{$endif ISSMS}
   if result<>'' then
     result[1] := '?';
 end;
@@ -1572,7 +1576,7 @@ function UrlDecode(const aValue: string): string;
 begin
   result := decodeURIComponent(aValue);
 end;
-{$else}
+{$else ISSMS}
 var i,c,n,len: integer;
     utf8: TUTF8Buffer;
 begin
@@ -1584,7 +1588,7 @@ begin
   begin
     {$ifndef NEXTGEN} // TUTF8Buffer = UTF8String is [1-based]
     inc(n);
-    {$endif}
+    {$endif NEXTGEN}
     c := ord(aValue[i]);
     case c of
     ord('+'):
@@ -1604,18 +1608,18 @@ begin
     inc(i);
     {$ifdef NEXTGEN} // TUTF8Buffer = TBytes is [0-based]
     inc(n);
-    {$endif}
+    {$endif NEXTGEN}
   end;
   SetLength(utf8,n);
   {$ifdef NEXTGEN}
-  result := TEncoding.UTF8.GetString(utf8);
-  {$else}
-  {$ifdef UNICODE}
-  result := UTF8ToString(utf8);
-  {$else}
-  result := Utf8Decode(utf8);
-  {$endif}
-  {$endif}
+    result := TEncoding.UTF8.GetString(utf8);
+  {$else NEXTGEN}
+    {$ifdef UNICODE}
+      result := UTF8ToString(utf8);
+    {$else UNICODE}
+      result := Utf8Decode(utf8);
+    {$endif UNICODE}
+  {$endif NEXTGEN}
 end;
 {$endif ISSMS}
 
@@ -1783,14 +1787,14 @@ begin
   result := true;
 end;
 
-{$endif}
+{$endif ISSMS}
 
 function TSQLRecord.FromJSON(const aJSON: string): boolean;
 var doc: TJSONVariantData;
     table: TSQLTableJSON;
     {$ifndef ISSMS}
     i: Integer;
-    {$endif}
+    {$endif ISSMS}
 begin
   if (self=nil) or (aJSON='') then
     result := false else
@@ -1807,13 +1811,13 @@ begin
     {$ifdef ISSMS}
     doc := TJSONVariantData.Create(aJSON);
     result := FromNamesValues(doc.Names,doc.Values,0);
-    {$else}
+    {$else ISSMS}
     doc.Init(aJSON);
     for i := 0 to doc.Count-1 do
       if IsRowID(doc.Names[i]) then
         doc.Names[i] := 'ID';
     result := doc.ToObject(self);
-    {$endif}
+    {$endif ISSMS}
   end;
 end;
 
@@ -1851,9 +1855,9 @@ begin
     var rtti := GetRTTI;
     for var f := 0 to high(rtti.Props) do
       result[rtti.Props[f].Name] := GetProperty(f);
-    {$else}
+    {$else ISSMS}
     result := JSONVariant(ObjectToJSON(self));
-    {$endif}
+    {$endif ISSMS}
   end;
 end;
 
@@ -1920,7 +1924,7 @@ begin
     Value.fInternalState := fInternalState;
 end;
 
-{$else}
+{$else ISDWS}
 
 function TSQLTableJSON.FillOne(aValue: TSQLRecord; aSeekFirst: boolean): boolean;
 begin
@@ -1981,9 +1985,9 @@ begin
     if f in fields then
       {$ifdef ISSMS}
       Value.SetProperty(ord(f),TimeStamp);
-      {$else}
+      {$else ISSMS}
       SetInstanceProp(Value,Prop[f].RTTI,TimeStamp);
-      {$endif}
+      {$endif ISSMS}
 end;
 
 function GetDisplayNameFromClass(C: TClass): string;
@@ -2009,10 +2013,10 @@ var f: TSQLFieldBit;
     Kind: TSQLFieldKind;
 {$ifdef ISDWS}
     rtti: TRTTIPropInfos;
-{$else}
+{$else ISDWS}
     List: TRTTIPropInfoDynArray;
     Names: TStringDynArray;
-{$endif}
+{$endif ISDWS}
 begin
   Table := aTable;
   Name := GetDisplayNameFromClass(Table);
@@ -2020,7 +2024,7 @@ begin
   rtti := aTable.GetRTTI;
   Prop := rtti.Props;
   PropCache := rtti.PropCache;
-  {$else}
+  {$else ISDWS}
   GetPropsInfo(Table.ClassInfo,Names,List);
   SetLength(Prop,length(List));
   for f := 0 to high(List) do 
@@ -2031,22 +2035,25 @@ begin
     else
       Prop[f].Name := Names[f];
   end;
-  {$endif}
+  {$endif ISDWS}
   for f := 0 to TSQLFieldBit(high(Prop)) do 
   begin
     include(AllFields,f);
     Kind := Prop[ord(f)].Kind;
     include(HasKind,Kind);
     if Kind=sftBlob then
-      Include(BlobFields,f) else
+      Include(BlobFields,f)
+    else
       Include(SimpleFields,f);
     case Kind of
-    sftModTime: begin
+    sftModTime:
+    begin
       include(ModTimeFields,f);
       include(ModAndCreateTimeFields,f);
       HasTimeFields := true;
     end;
-    sftCreateTime: begin
+    sftCreateTime:
+    begin
       include(CreateTimeFields,f);
       include(ModAndCreateTimeFields,f);
       HasTimeFields := true;
@@ -2069,7 +2076,7 @@ begin
     Prop[i].Free;
 end;
 
-{$endif}
+{$endif ISSMS}
 
 function TSQLModelInfo.FieldBitsToFieldNames(
   const FieldBits: TSQLFieldBits): string;
@@ -2104,26 +2111,27 @@ begin
       var Info: TSQLModelInfoPropInfo;
       if Find(PropCache,field,info) then
         include(result,info.FieldIndex);
-      {$else}
+      {$else ISSMS}
       if IsRowID(field) then
-        Include(result,ID_SQLFIELD) else
+        Include(result,ID_SQLFIELD)
+      else
         for f := 1 to length(Prop)-1 do
           if IdemPropName(field,Prop[ord(f)].Name) then 
           begin
             include(result,f);
             break;
           end;
-      {$endif}
+      {$endif ISSMS}
     end;
     {$ifdef ISSMS}
     if IncludeModTimeFields and (sftModTime in HasKind) then
       for f := 1 to length(Prop)-1 do
         if f in ModTimeFields then
           include(result,f);
-    {$else}
+    {$else ISSMS}
     if IncludeModTimeFields then
       result := result+ModTimeFields;
-    {$endif}
+    {$endif ISSMS}
   end;
 end;
 
@@ -2144,7 +2152,7 @@ begin
     if f in Fields then
       doc[Prop[ord(f)].Name] := Value.GetProperty(f);
   result := JSON.Stringify(doc); // rely on JavaScript serialization
-{$else}
+{$else ISSMS}
   result := '{';
   for f := 0 to length(Prop)-1 do
     if f in Fields then
@@ -2154,7 +2162,7 @@ begin
     result := 'null' 
   else
     result[Length(Result)] := '}';
-{$endif}
+{$endif ISSMS}
 end;
 
 function TSQLModelInfo.ToJSONAdd(Client: TSQLRest;
@@ -2195,10 +2203,10 @@ begin
   nfo := TSQLModelInfo.CreateFromRTTI(Table);
   {$ifdef ISSMS}
   fInfo.Add(nfo);
-  {$else}
+  {$else ISSMS}
   SetLength(fInfo,n+1);
   fInfo[n] := nfo;
-  {$endif}
+  {$endif ISSMS}
 end;
 
 constructor TSQLModel.Create(const Tables: array of TSQLRecordClass;
@@ -2208,11 +2216,11 @@ begin
   {$ifdef ISSMS}
   for t := 0 to high(Tables) do
     fInfo.Add(TSQLModelInfo.CreateFromRTTI(Tables[t]));
-  {$else}
+  {$else ISSMS}
   SetLength(fInfo,length(Tables));
   for t := 0 to high(fInfo) do
     fInfo[t] := TSQLModelInfo.CreateFromRTTI(Tables[t]);
-  {$endif}
+  {$endif ISSMS}
   if aRoot<>'' then
     if aRoot[length(aRoot)]='/' then
       fRoot := copy(aRoot,1,Length(aRoot)-1) 
@@ -2248,7 +2256,7 @@ begin
     fInfo[i].Free;
 end;
 
-{$endif}
+{$endif ISSMS}
 
 function TSQLModel.InfoExisting(aTable: TSQLRecordClass): TSQLModelInfo;
 begin
@@ -2341,8 +2349,11 @@ function TSQLRest.Retrieve(const FieldNames,SQLWhere: string;
   const BoundsSQLWhere: array of const; Value: TSQLRecord): boolean;
 var table: TSQLTableJSON;
 begin
-  table := MultiFieldValues(Value.RecordClass,FieldNames,
-    SQLWhere,BoundsSQLWhere,true);
+  table := MultiFieldValues(Value.RecordClass,
+                            FieldNames,
+                            SQLWhere,
+                            BoundsSQLWhere,
+                            true);
   if table=nil then
     result := false 
   else
@@ -2353,6 +2364,31 @@ begin
   end;
 end;
 
+procedure TSQLRest.RetrieveIDs(AClass: TSQLRecordClass; const SQLWhere: string; const BoundsSQLWhere: array of const;
+  var oRes: TIDDynArray);
+var
+  vRows: TSQLTableJSON;
+  vLength : Integer;
+begin
+  vRows := MultiFieldValues(AClass,
+                            'ID',
+                            SQLWhere,
+                            BoundsSQLWhere);
+  vLength := Length(oRes);
+  if vRows<>nil then
+  try
+    repeat
+      if not vRows.Step(false) then
+        break;
+      SetLength(oRes, vLength+1);
+      oRes[vLength] := vRows.Value['ID'];
+      inc(vLength);
+    until false;
+  finally
+    vRows.Free;
+  end;
+end;
+
 function TSQLRest.RetrieveList(Table: TSQLRecordClass; const FieldNames,
   SQLWhere: string; const BoundsSQLWhere: array of const): TObjectList;
 var rows: TSQLTableJSON;
@@ -2360,13 +2396,17 @@ var rows: TSQLTableJSON;
 begin
   {$ifndef ISSMS} // result is already created as "array of TObject"
   result := TObjectList.Create;
-  {$endif}
-  rows := MultiFieldValues(Table,FieldNames,SQLWhere,BoundsSQLWhere);
+  {$endif ISSMS}
+  rows := MultiFieldValues(Table,
+                           FieldNames,
+                           SQLWhere,
+                           BoundsSQLWhere);
   if rows<>nil then
   try
     repeat
       rec := Table.Create;
-      if not rows.FillOne(rec) then begin
+      if not rows.FillOne(rec) then
+      begin
         rec.Free;
         break;
       end;
@@ -2380,26 +2420,54 @@ end;
 {$ifdef ISDELPHI2010}
 function TSQLRest.RetrieveList<T>(const FieldNames, SQLWhere: string;
   const BoundsSQLWhere: array of const): TObjectList<T>;
-var rows: TSQLTableJSON;
-    rec: TSQLRecord;
+var vRows: TSQLTableJSON;
+    vRec: TSQLRecord;
 begin
   result := TObjectList<T>.Create; // TObjectList<T> will free each T instance
-  rows := MultiFieldValues(TSQLRecordClass(T),FieldNames,SQLWhere,BoundsSQLWhere);
-  if rows<>nil then
+  vRows := MultiFieldValues(TSQLRecordClass(T),
+                            FieldNames,
+                            SQLWhere,
+                            BoundsSQLWhere);
+  if vRows<>nil then
   try
     repeat
-      rec := TSQLRecordClass(T).Create;
-      if not rows.FillOne(rec) then begin
-        rec.Free;
+      vRec := TSQLRecordClass(T).Create;
+      if not vRows.FillOne(vRec) then
+      begin
+        vRec.Free;
         break;
       end;
-      result.Add(rec);
+      result.Add(vRec);
     until false;
   finally
-    rows.Free;
+    vRows.Free;
   end;
 end;
-{$endif}
+
+procedure TSQLRest.RetrieveIDs(AClass : TSQLRecordClass; const SQLWhere: string;
+                const BoundsSQLWhere: array of const; oRes : TList<TID>);
+var
+  vRows: TSQLTableJSON;
+  vID : TID;
+begin
+  vRows := MultiFieldValues(AClass,
+                            'ID',
+                            SQLWhere,
+                            BoundsSQLWhere);
+  if vRows<>nil then
+  try
+    repeat
+      if not vRows.Step(false) then
+        break;
+      vID := vRows.Value['ID'];
+      oRes.Add(vID);
+    until false;
+  finally
+    vRows.Free;
+  end;
+end;
+
+{$endif ISDELPHI2010}
 
 function TSQLRest.Add(Value: TSQLRecord; SendData, ForceID: boolean;
   const FieldNames: string): TID;
@@ -2526,7 +2594,8 @@ begin
     result := HTTP_BADREQUEST 
   else
   try
-    if BatchCount>0 then begin
+    if BatchCount>0 then
+    begin
       fBatch[length(fBatch)] := ']';
       if fBatchTable<>nil then
         fBatch := fBatch+'}';
@@ -2601,13 +2670,13 @@ procedure TSQLRest.Log(E: Exception);
 begin
   if Assigned(self) and Assigned(fOnLog) and (sllException in fLogLevel) then 
   begin
-   {$ifdef ISSMS}
-   var msg: string;
-   asm @msg = new Error().stack; end;
-   Log(sllException,'%s raised with message "%s" %s',[E.ClassName,E.Message,msg]);
-   {$else}
-   Log(sllException,'%s raised with message "%s"',[E.ClassName,E.Message]);
-   {$endif}
+    {$ifdef ISSMS}
+    var msg: string;
+    asm @msg = new Error().stack; end;
+    Log(sllException,'%s raised with message "%s" %s',[E.ClassName,E.Message,msg]);
+    {$else}
+    Log(sllException,'%s raised with message "%s"',[E.ClassName,E.Message]);
+    {$endif}
   end;
 end;
 
@@ -3096,8 +3165,8 @@ begin
       if not assigned(onBeforeSuccess) then
         onSuccess(self) else
         if onBeforeSuccess then
-          onSuccess(self) else
-          if assigned(onError) then
+          onSuccess(self)
+        else if assigned(onError) then
             onError(self);
       if fAsynchCount>0 then
         dec(fAsynchCount);
@@ -3180,12 +3249,12 @@ begin
         else begin
           var res := TJSONVariantData.CreateFrom(result);
           if (res.Kind=jvArray) and (res.Count=aExpectedOutputParamsCount) then
-            onSuccess(res.Values) else
+            onSuccess(res.Values)
+          else
             if Assigned(onError) then
               onError(self);
         end;
-      end else
-        if Assigned(onError) then
+      end else if Assigned(onError) then
           onError(self);
     end,
     onError,
@@ -3225,7 +3294,8 @@ begin
     exit; // returns default []
   var res := TJSONVariantData.CreateFrom(outResult);
   if (res.Kind=jvArray) and (res.Count=aExpectedOutputParamsCount) then
-    result := res.Values else
+    result := res.Values
+  else
     raise EServiceException.CreateFmt('Error calling %s.%s - '+
       'received %d parameters (expected %d)',
       [aCaller.fServiceName,aMethodName,res.Count,aExpectedOutputParamsCount]);
@@ -3295,13 +3365,15 @@ begin
   result := 0;
   Call.Init(getURIID(tableIndex,0),'POST',json);
   URI(Call);
-  if Call.OutStatus<>HTTP_CREATED then begin
+  if Call.OutStatus<>HTTP_CREATED then
+  begin
     Log(sllError,'Error creating %s with %s',[Model.Info[tableIndex].Name,json]);
     exit;
   end;
   location := GetOutHeader(Call,'location');
   for i := length(location) downto 1 do
-    if not (ord(location[i]) in [ord('0')..ord('9')]) then begin
+    if not (ord(location[i]) in [ord('0')..ord('9')]) then
+    begin
       result := StrToInt64Def(Copy(location,i+1,length(location)),0);
       break; // 'Location: root/People/11012' e.g.
     end;
@@ -3687,7 +3759,8 @@ begin
   begin
     var s: string := Value;
     if s='' then
-      result := null else
+      result := null
+    else
       result := BrowserAPI.Window.atob(s);
   end else
     result := null;
@@ -3741,7 +3814,8 @@ end;
 function BlobToVariant(const Blob: TSQLRawBlob): variant;
 begin
   if Blob=nil then
-    result := null else
+    result := null
+  else
     result := BytesToBase64JSONString(Blob);
 end;
 

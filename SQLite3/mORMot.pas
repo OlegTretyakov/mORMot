@@ -4793,6 +4793,8 @@ const
   HTTP_PROXYAUTHREQUIRED = 407;
   /// HTTP Status Code for "Request Time-out"
   HTTP_TIMEOUT = 408;
+  /// HTTP Status Code for "Conflict"
+  HTTP_CONFLICT = 409;
   /// HTTP Status Code for "Payload Too Large"
   HTTP_PAYLOADTOOLARGE = 413;
   /// HTTP Status Code for "Internal Server Error"
@@ -4855,7 +4857,7 @@ function StatusCodeIsSuccess(Code: integer): boolean;
 
 /// check the supplied HTTP header to not contain more than one EOL
 // - to avoid unexpected HTTP body injection, e.g. from unsafe business code
-function IsInvalidHttpHeader(head: PUTF8Char; headlen: integer): boolean;
+function IsInvalidHttpHeader(head: PUTF8Char; headlen: PtrInt): boolean;
 
 /// computes an URI with optional jwt authentication parameter
 // - if AuthenticationBearer is set, will add its values as additional parameter:
@@ -6119,9 +6121,9 @@ type
   // kind of custom routing or execution scheme
   // - instantiated by the TSQLRestServer.URI() method using its ServicesRouting
   // property
-  // - see TSQLRestRoutingREST and TSQLRestRoutingJSON_RPC
-  // for overridden methods - NEVER set this abstract TSQLRestServerURIContext
-  // class on TSQLRest.ServicesRouting property !
+  // - see TSQLRestRoutingREST and TSQLRestRoutingJSON_RPC for working inherited
+  // classes - NEVER set this abstract TSQLRestServerURIContext class to
+  // TSQLRest.ServicesRouting property !
   TSQLRestServerURIContext = class
   protected
     fInput: TRawUTF8DynArray; // even items are parameter names, odd are values
@@ -6145,7 +6147,6 @@ type
     {$ifndef NOVARIANTS}
     function GetInput(const ParamName: RawUTF8): variant;
     function GetInputOrVoid(const ParamName: RawUTF8): variant;
-    function GetInputAsTDocVariant: variant;
     {$endif}
     function GetInputNameIndex(const ParamName: RawUTF8): integer;
     function GetInputExists(const ParamName: RawUTF8): Boolean;
@@ -6332,7 +6333,7 @@ type
     Session: cardinal;
     /// the corresponding TAuthSession.User.GroupRights.ID value
     // - is undefined if Session is 0 or 1 (no authentication running)
-    SessionGroup: integer;
+    SessionGroup: TID;
     /// the corresponding TAuthSession.User.ID value
     // - is undefined if Session is 0 or 1 (no authentication running)
     SessionUser: TID;
@@ -6452,13 +6453,14 @@ type
     // - returns Unassigned if no parameter was defined
     // - returns a JSON object with input parameters encoded as
     // ! {"name1":value1,"name2":value2...}
+    // - optionally with a PServiceMethod information about the actual values types
     // - if the parameters were encoded as multipart, the JSON object
     // will be encoded with its textual values, or with nested objects, if
     // the data was supplied as binary:
     // ! {"name1":{"data":..,"filename":...,"contenttype":...},"name2":...}
     // since name1.data will be Base64 encoded, so you should better
     // use the InputAsMultiPart() method instead when working with binary
-    property InputAsTDocVariant: variant read GetInputAsTDocVariant;
+    function GetInputAsTDocVariant(const Options: TDocVariantOptions; ServiceMethod: pointer): variant;
     {$endif}
     /// decode any multipart/form-data POST request input
     // - returns TRUE and set MultiPart array as expected, on success
@@ -12590,6 +12592,10 @@ type
   TOnServiceCanExecute = function(Ctxt: TSQLRestServerURIContext;
     const Method: TServiceMethod): boolean of object;
 
+  /// callbacked used by TServiceFactoryServer.RunOnAllInstances method
+  TOnServiceFactoryServerOne = function(Sender: TServiceFactoryServer;
+    var Instance: TServiceFactoryServerInstance; var Opaque): integer of object;
+
   /// a service provider implemented on the server side
   // - each registered interface has its own TServiceFactoryServer instance,
   // available as one TSQLServiceContainerServer item from TSQLRest.Services property
@@ -12600,7 +12606,7 @@ type
   protected
     fInstances: TServiceFactoryServerInstanceDynArray;
     fInstance: TDynArray;
-    fInstanceCapacity: integer;
+    fInstanceCapacity: integer; // some void entries may have P^.InstanceID=0
     fInstanceCount: integer;
     fInstanceCurrentID: TID;
     fInstanceTimeOut: cardinal;
@@ -12821,6 +12827,10 @@ type
     // will be able to retrieve it only if TServiceContainerServer.PublishSignature
     // is set to TRUE (which is not the default setting, for security reasons)
     function RetrieveSignature: RawUTF8; override;
+    /// call the supplied aEvent callback for all class instances implementing
+    // this service
+    function RunOnAllInstances(const aEvent: TOnServiceFactoryServerOne;
+      var aOpaque): integer;
 
     /// just type-cast the associated TSQLRest instance to a true TSQLRestServer
     function RestServer: TSQLRestServer;
@@ -17653,7 +17663,10 @@ type
     // - any connection attempt from this IP Address will be rejected by
     function BanIP(const aIP: RawUTF8; aRemoveBan: boolean=false): boolean;
     /// (un)register a an IPv4 value to the JWT white list
-    // - JWT connection attempts will be validated against this IP list
+    // - by default, a JWT validated by JWTForUnauthenticatedRequest will be accepted
+    // - to avoid MiM (Man-In-the-Middle) attacks, if a JWT white list is defined
+    // using this method, any connection from a non registered IP will be rejected,
+    // even with a valid JWT
     // - WebSockets connections are secure enough to bypass this list
     function JWTForUnauthenticatedRequestWhiteIP(const aIP: RawUTF8; aRemoveWhite: boolean=false): boolean;
     /// add all published methods of a given object instance to the method-based
@@ -24604,8 +24617,8 @@ begin
   result := mNone;
 end;
 
-function IsInvalidHttpHeader(head: PUTF8Char; headlen: integer): boolean;
-var i: integer;
+function IsInvalidHttpHeader(head: PUTF8Char; headlen: PtrInt): boolean;
+var i: PtrInt;
 begin
   result := true;
   for i := 0 to headlen-3 do
@@ -31229,8 +31242,7 @@ var j: integer;
     PS: PShortString;
 begin
   W.Add('[');
-  if FullSetsAsStar and (MaxValue<32) and
-     GetAllBits(Value,MaxValue+1) then
+  if FullSetsAsStar and (MaxValue in [1..31]) and GetAllBits(Value,MaxValue+1) then
     W.AddShort('"*"') else begin
     PS := @NameList;
     for j := MinValue to MaxValue do begin
@@ -31254,8 +31266,7 @@ var j: integer;
     arr: TDocVariantData;
 begin
   arr.InitFast;
-  if FullSetsAsStar and (MaxValue<32) and
-     GetAllBits(Value,MaxValue+1) then
+  if FullSetsAsStar and (MaxValue in [1..31]) and GetAllBits(Value,MaxValue+1) then
     arr.AddItem('*') else begin
     PS := @NameList;
     for j := MinValue to MaxValue do begin
@@ -37025,16 +37036,17 @@ var Tix: cardinal;
 begin
   Tix := GetTickCount shr 9; // resolution change 1 ms -> 512 ms
   if fServerTimestampCacheTix=Tix then
-    result := fServerTimestampCacheValue.Value else begin
+    result := fServerTimestampCacheValue.Value else
+  begin
     fServerTimestampCacheTix := Tix;
-    fServerTimestampCacheValue.From(NowUTC+fServerTimestampOffset);
+    fServerTimestampCacheValue.From(Now{UTC}+fServerTimestampOffset);
     result := fServerTimestampCacheValue.Value;
   end;
 end;
 
 procedure TSQLRest.SetServerTimestamp(const Value: TTimeLog);
 begin
-  fServerTimestampOffset := PTimeLogBits(@Value)^.ToDateTime-NowUTC;
+  fServerTimestampOffset := PTimeLogBits(@Value)^.ToDateTime-Now{UTC};
   if fServerTimestampOffset=0 then
     fServerTimestampOffset := 0.000001; // retrieve server date/time only once
 end;
@@ -40932,7 +40944,8 @@ end;
 var Method: TThreadMethod;
     Start64: Int64;
 begin
-  with Server.fAcquireExecution[Command] do begin
+  with Server.fAcquireExecution[Command] do
+  begin
     case Command of
       execSOAByMethod:
         Method := ExecuteSOAByMethod;
@@ -40940,15 +40953,18 @@ begin
         Method := ExecuteSOAByInterface;
       execORMGet:
         Method := ExecuteORMGet;
-      execORMWrite: begin // special behavior to handle transactions at writing
+      execORMWrite:
+      begin // special behavior to handle transactions at writing
         Method := ExecuteORMWrite;
         Start64 := GetTickCount64;
         repeat
           if Safe.TryLock then
           try
             if (Server.fTransactionActiveSession=0) or // avoid transaction mixups
-               (Server.fTransactionActiveSession=Session) then begin
-              if Mode=amLocked then begin
+               (Server.fTransactionActiveSession=Session) then
+            begin
+              if Mode=amLocked then
+              begin
                 ExecuteORMWrite; // process within the obtained write mutex
                 exit;
               end;
@@ -40957,7 +40973,8 @@ begin
           finally
             Safe.UnLock;
           end;
-          if (LockedTimeOut<>0) and (GetTickCount64>Start64+LockedTimeOut) then begin
+          if (LockedTimeOut<>0) and (GetTickCount64>Start64+LockedTimeOut) then
+          begin
             TimeOut; // wait up to 5 second by default
             exit;
           end;
@@ -41003,13 +41020,14 @@ begin
     amMainThread:
       BackgroundExecuteThreadMethod(Method,nil);
     {$endif}
-    amBackgroundThread,amBackgroundORMSharedThread: begin
+    amBackgroundThread,amBackgroundORMSharedThread:
+    begin
       if Thread=nil then
         Thread := Server.NewBackgroundThreadMethod('% "%" %',
           [self,Server.Model.Root,ToText(Command)^]);
       BackgroundExecuteThreadMethod(Method,Thread);
     end;
-    end;
+  end;
 end;
 
 procedure TSQLRestServerURIContext.ConfigurationRestMethod(SettingsStorage: TObject);
@@ -41903,23 +41921,33 @@ begin
     GetVariantFromJSON(pointer(ValueUTF8),false,Value);
 end;
 
-function TSQLRestServerURIContext.GetInputAsTDocVariant: variant;
-var ndx: integer;
+function TSQLRestServerURIContext.GetInputAsTDocVariant(const Options: TDocVariantOptions; 
+  ServiceMethod: pointer): variant;
+var ndx, a: PtrInt;
+    forcestring: boolean;
     v: variant;
     MultiPart: TMultiPartDynArray;
+    name: RawUTF8;
+    met: PServiceMethod absolute ServiceMethod;
     res: TDocVariantData absolute result;
 begin
   VarClear(result);
   FillInput;
   if fInput<>nil then begin
-    res.InitFast;
+    res.Init(Options,dvObject);
     for ndx := 0 to (length(fInput) shr 1)-1 do begin
-      GetVariantFromJSON(pointer(fInput[ndx*2+1]),false,v,@JSON_OPTIONS[true]);
-      res.AddValue(fInput[ndx*2],v);
+      name := fInput[ndx*2];
+      if met<>nil then begin
+        a := met.ArgIndex(pointer(name),length(name),{input=}true);
+        forcestring := (a>=0) and (vIsString  in met.Args[a].ValueKindAsm);
+      end else
+        forcestring := false;
+      GetVariantFromJSON(pointer(fInput[ndx*2+1]),forcestring,v,@Options);
+      res.AddValue(name,v);
     end;
   end else
   if InputAsMultiPart(MultiPart) then begin
-    res.InitFast;
+    res.Init(Options,dvObject);
     for ndx := 0 to high(MultiPart) do
       with MultiPart[ndx] do
         if ContentType=TEXT_CONTENT_TYPE then begin
@@ -42645,17 +42673,20 @@ begin
     {$endif}
     Ctxt.SafeProtocolID := safeID;
     if fShutdownRequested then
-      Ctxt.Error('Server is shutting down',HTTP_UNAVAILABLE) else
-    if Ctxt.Method=mNone then
-      Ctxt.Error('Unknown Verb %',[Call.Method]) else
-    if (fIPBan<>nil) and fIPBan.Exists(Ctxt.RemoteIP) then
-      Ctxt.Error('Banned IP %',[Ctxt.fRemoteIP]) else
+      Ctxt.Error('Server is shutting down',HTTP_UNAVAILABLE)
+    else if Ctxt.Method=mNone then
+      Ctxt.Error('Unknown Verb %',[Call.Method])
+    else if (fIPBan<>nil) and fIPBan.Exists(Ctxt.RemoteIP) then
+      Ctxt.Error('Banned IP %',[Ctxt.fRemoteIP])
+    else
     // 1. decode URI
     if not Ctxt.URIDecodeREST then
-      Ctxt.Error('Invalid Root',HTTP_NOTFOUND) else
-    if (RootRedirectGet<>'') and (Ctxt.Method=mGet) and
+      Ctxt.Error('Invalid Root',HTTP_NOTFOUND)
+    else if (RootRedirectGet<>'') and (Ctxt.Method=mGet) and
        (Call.Url=Model.Root) and (Call.InBody='') then
-      Ctxt.Redirect(RootRedirectGet) else begin
+      Ctxt.Redirect(RootRedirectGet)
+    else
+    begin
       Ctxt.URIDecodeSOAByMethod;
       if (Ctxt.MethodIndex<0) and (Ctxt.URI<>'') then
         Ctxt.URIDecodeSOAByInterface;
@@ -42663,15 +42694,16 @@ begin
       if (rsoSecureConnectionRequired in fOptions) and
          (Ctxt.MethodIndex<>fPublishedMethodTimestampIndex) and
          not (llfSecured in Call.LowLevelFlags) then
-        Ctxt.AuthenticationFailed(afSecureConnectionRequired) else
-      if not Ctxt.Authenticate then
-        Ctxt.AuthenticationFailed(afInvalidSignature) else
-      if (Ctxt.Service<>nil) and
+        Ctxt.AuthenticationFailed(afSecureConnectionRequired)
+      else if not Ctxt.Authenticate then
+        Ctxt.AuthenticationFailed(afInvalidSignature)
+      else if (Ctxt.Service<>nil) and
           not (reService in Call.RestAccessRights^.AllowRemoteExecute) then
         if (rsoRedirectForbiddenToAuth in Options) and (Ctxt.ClientKind=ckAjax) then
-          Ctxt.Redirect(Model.Root+'/auth') else
-          Ctxt.AuthenticationFailed(afRemoteServiceExecutionNotAllowed) else
-      if (Ctxt.Session<>CONST_AUTHENTICATION_NOT_USED) or
+          Ctxt.Redirect(Model.Root+'/auth')
+        else
+          Ctxt.AuthenticationFailed(afRemoteServiceExecutionNotAllowed)
+      else if (Ctxt.Session<>CONST_AUTHENTICATION_NOT_USED) or
          (fJWTForUnauthenticatedRequest=nil) or
          (Ctxt.MethodIndex=fPublishedMethodTimestampIndex) or
          ((llfSecured in Call.LowLevelFlags) and
@@ -42681,13 +42713,15 @@ begin
       try
         if Ctxt.MethodIndex>=0 then
           if Ctxt.MethodIndex=fPublishedMethodBatchIndex then
-            Ctxt.Command := execORMWrite else
-            Ctxt.Command := execSOAByMethod else
-        if Ctxt.Service<>nil then
-          Ctxt.Command := execSOAByInterface else
-        if Ctxt.Method in [mLOCK,mGET,mUNLOCK,mSTATE] then
+            Ctxt.Command := execORMWrite
+          else
+            Ctxt.Command := execSOAByMethod
+        else if Ctxt.Service<>nil then
+          Ctxt.Command := execSOAByInterface
+        else if Ctxt.Method in [mLOCK,mGET,mUNLOCK,mSTATE] then
           // handle read methods
-          Ctxt.Command := execORMGet else
+          Ctxt.Command := execORMGet
+        else
           // write methods (mPOST, mPUT, mDELETE...)
           Ctxt.Command := execORMWrite;
         if not Assigned(OnBeforeURI) or OnBeforeURI(Ctxt) then
@@ -42701,9 +42735,11 @@ begin
       end;
     end;
     // 4. returns expected result to the client and update Server statistics
-    if StatusCodeIsSuccess(Call.OutStatus) then begin
+    if StatusCodeIsSuccess(Call.OutStatus) then
+    begin
       outcomingfile := false;
-      if Call.OutBody<>'' then begin
+      if Call.OutBody<>'' then
+      begin
         len := length(Call.OutHead);
         outcomingfile := (len>=25) and (Call.OutHead[15]='!') and
           IdemPChar(pointer(Call.OutHead),STATICFILE_CONTENT_TYPE_HEADER_UPPPER);
@@ -42712,7 +42748,8 @@ begin
            (rsoHttp200WithNoBodyReturns204 in fOptions) then
           Call.OutStatus := HTTP_NOCONTENT;
       fStats.ProcessSuccess(outcomingfile);
-    end else begin
+    end else
+    begin
       fStats.ProcessErrorNumber(Call.OutStatus);
       if Call.OutBody='' then // if no custom error message, compute it now as JSON
         Ctxt.Error(Ctxt.CustomErrorMsg,Call.OutStatus);
@@ -42723,17 +42760,19 @@ begin
     else if (Ctxt.Static<>nil) and Ctxt.Static.InheritsFrom(TSQLRestStorage) and
        TSQLRestStorage(Ctxt.Static).fOutInternalStateForcedRefresh then
       // force always refresh for Static table which demands it
-      Call.OutInternalState := cardinal(-1) else
+      Call.OutInternalState := cardinal(-1)
+    else
       // database state may have changed above
       Call.OutInternalState := InternalState;
-    if Ctxt.OutSetCookie<>'' then begin
+    if Ctxt.OutSetCookie<>'' then
+    begin
       Call.OutHead := Trim(Call.OutHead+#13#10'Set-Cookie: '+Ctxt.OutSetCookie);
       if rsoCookieIncludeRootPath in fOptions then
         Call.OutHead := Call.OutHead+'; Path=/'; // case-sensitive Path=/ModelRoot
     end;
     if not (rsoHttpHeaderCheckDisable in fOptions) and
        IsInvalidHttpHeader(pointer(Call.OutHead), length(Call.OutHead)) then
-      Ctxt.Error('Unsafe HTTP header rejected', HTTP_SERVERERROR);
+      Ctxt.Error('Unsafe HTTP header rejected [%]', [EscapeToShort(Call.OutHead)], HTTP_SERVERERROR);
   finally
     QueryPerformanceCounter(timeEnd);
     Ctxt.MicroSecondsElapsed := fStats.FromExternalQueryPerformanceCounters(timeEnd-timeStart);
@@ -42768,9 +42807,11 @@ begin
   end;
   if safeid<>0 then
     InternalSafeProtocol(Call,safeid); // encrypt Call.OutBody+OutHead
-  if Assigned(OnIdle) then begin
+  if Assigned(OnIdle) then
+  begin
     elapsed := GetTickCount64 shr 7; // trigger every 128 ms
-    if elapsed<>fOnIdleLastTix then begin
+    if elapsed<>fOnIdleLastTix then
+    begin
       OnIdle(self);
       fOnIdleLastTix := elapsed;
     end;
@@ -43290,9 +43331,11 @@ var i: integer;
     tix, session: cardinal;
     sessions: ^TAuthSession;
 begin // caller of RetrieveSession() made fSessions.Safe.Lock
-  if (self<>nil) and (fSessions<>nil) then begin
+  if (self<>nil) and (fSessions<>nil) then
+  begin
     tix := GetTickCount64 shr 10;
-    if tix<>fSessionsDeprecatedTix then begin
+    if tix<>fSessionsDeprecatedTix then
+    begin
       fSessionsDeprecatedTix := tix; // check deprecated sessions every second
       for i := fSessions.Count-1 downto 0 do
         if tix>TAuthSession(fSessions.List[i]).TimeOutTix then
@@ -43302,7 +43345,8 @@ begin // caller of RetrieveSession() made fSessions.Safe.Lock
     sessions := pointer(fSessions.List);
     session := Ctxt.Session;
     for i := 1 to fSessions.Count do
-      if sessions^.IDCardinal=session then begin
+      if sessions^.IDCardinal=session then
+      begin
         result := sessions^;
         result.fTimeOutTix := tix+result.TimeoutShr10;
         Ctxt.fSession := result; // for TSQLRestServer internal use
@@ -43331,8 +43375,10 @@ begin
   try
     for i := 0 to fSessions.Count-1 do
       with TAuthSession(fSessions.List[i]) do
-      if IDCardinal=aSessionID then begin
-        if User<>nil then begin
+      if IDCardinal=aSessionID then
+      begin
+        if User<>nil then
+        begin
           result := User.CreateCopy as fSQLAuthUserClass;
           result.GroupRights := nil;
         end;
@@ -46293,7 +46339,7 @@ begin
           R := result - 1;
       until (L > R);
     end else
-      // IDs are not sorted (not possible in practice) -> O(n) lookup
+      // IDs are not sorted (not possible in practice) or only a few -> O(n) lookup
       for result := 0 to R do
         if rec[result].fID=ID then
           exit;
@@ -53356,8 +53402,11 @@ begin
   if (err<>0) or (UserID<=0) or not (saoUserByLogonOrID in fOptions) then
     UserID := 0;
   if Assigned(fServer.OnAuthenticationUserRetrieve) then
-    result := fServer.OnAuthenticationUserRetrieve(self,Ctxt,UserID,aUserName) else begin
-    if UserID<>0 then begin // try if TSQLAuthUser.ID was transmitted
+    result := fServer.OnAuthenticationUserRetrieve(self,Ctxt,UserID,aUserName)
+  else
+  begin
+    if UserID<>0 then
+    begin // try if TSQLAuthUser.ID was transmitted
       result := fServer.fSQLAuthUserClass.Create(fServer,UserID); // may use ORM cache :)
       if result.fID=0 then
         FreeAndNil(result);
@@ -53372,11 +53421,12 @@ begin
         result.DisplayName := aUserName;
       end;
   end;
-  if (result=nil) or (result.fID=0) then begin
+  if (result=nil) or (result.fID=0) then
+  begin
     fServer.InternalLog('%.LogonName=% not found',[fServer.fSQLAuthUserClass,aUserName],sllUserAuth);
     FreeAndNil(result);
-  end else
-  if not result.CanUserLog(Ctxt) then begin
+  end else if not result.CanUserLog(Ctxt) then
+  begin
     fServer.InternalLog('%.CanUserLog(%) returned FALSE -> rejected',[result,aUserName],sllUserAuth);
     FreeAndNil(result);
   end;
@@ -53390,7 +53440,14 @@ begin
   try // now client is authenticated -> create a session
     fServer.SessionCreate(User,Ctxt,Session); // call Ctxt.AuthenticationFailed on error
     if Session<>nil then
+    begin
+      Ctxt.fSession := Session;
+      Ctxt.Session := Session.fIDCardinal;
+      Ctxt.SessionUser := Session.fUser.ID;
+      Ctxt.SessionUserName := Session.fUser.LogonName;
+      Ctxt.SessionGroup := Session.fUser.GroupRights.ID;
       SessionCreateReturns(Ctxt,Session,Session.fPrivateSalt,'','');
+    end;
   finally
     User.Free;
   end;
@@ -53713,14 +53770,16 @@ begin
   aUserName := Ctxt.InputUTF8OrVoid['UserName'];
   aPassWord := Ctxt.InputUTF8OrVoid['Password'];
   aClientNonce := Ctxt.InputUTF8OrVoid['ClientNonce'];
-  if (aUserName<>'') and (length(aClientNonce)>32) then begin
+  if (aUserName<>'') and (length(aClientNonce)>32) then
+  begin
     // GET ModelRoot/auth?UserName=...&PassWord=...&ClientNonce=... -> handshaking
     User := GetUser(Ctxt,aUserName);
     if User<>nil then
     try
       // check if match TSQLRestClientURI.SetUser() algorithm
       if CheckPassword(Ctxt,User,aClientNonce,aPassWord) then
-        SessionCreate(Ctxt,User) else // will call Ctxt.AuthenticationFailed on error
+        SessionCreate(Ctxt,User)
+      else // will call Ctxt.AuthenticationFailed on error
         Ctxt.AuthenticationFailed(afInvalidPassword);
     finally
       User.Free;
@@ -53780,7 +53839,8 @@ begin
     exit;
   U := GetUser(Ctxt,aUserName);
   if U=nil then
-    Ctxt.AuthenticationFailed(afUnknownUser) else
+    Ctxt.AuthenticationFailed(afUnknownUser)
+  else
     SessionCreate(Ctxt,U); // call Ctxt.AuthenticationFailed on error
 end;
 
@@ -53918,12 +53978,14 @@ var userPass,user,pass: RawUTF8;
     U: TSQLAuthUser;
     Session: TAuthSession;
 begin
-  if Ctxt.InputExists['UserName'] then begin
+  if Ctxt.InputExists['UserName'] then
+  begin
     result := false; // allow other schemes to check this request
     exit;
   end;
   result := true; // this authentication method is exclusive to any other
-  if GetUserPassFromInHead(Ctxt,userPass,user,pass) then begin
+  if GetUserPassFromInHead(Ctxt,userPass,user,pass) then
+  begin
     U := GetUser(Ctxt,user);
     if U<>nil then
     try
@@ -55375,8 +55437,8 @@ begin
     @fMethodsCount,true);
   AddMethodsFromTypeInfo(aInterface); // from RTTI or generated code
   if fMethodsCount=0 then
-    raise EInterfaceFactoryException.CreateUTF8(
-      '%.Create(%): interface has no RTTI',[self,fInterfaceName]);
+    raise EInterfaceFactoryException.CreateUTF8('%.Create(%): interface has '+
+      'no RTTI - should inherit from IInvokable',[self,fInterfaceName]);
   if fMethodsCount>MAX_METHOD_COUNT then
     raise EInterfaceFactoryException.CreateUTF8(
       '%.Create(%): interface has too many methods (%), so breaks the '+
@@ -56106,7 +56168,7 @@ const
   DEFCC = ccRegister;
   {$else}
   DEFCC = ccStdCall;
-  {$ifend}
+  {$IFEND}
 var P: Pointer;
     {$ifdef FPC}
     PI: TYPINFO.PInterfaceData;
@@ -59387,6 +59449,27 @@ begin
   end;
 end;
 
+function TServiceFactoryServer.RunOnAllInstances(const aEvent: TOnServiceFactoryServerOne;
+  var aOpaque): integer;
+var i: integer;
+    P: ^TServiceFactoryServerInstance;
+begin
+  result := 0;
+  if (self = nil) or not Assigned(aEvent) or (fInstanceCount=0) then
+    exit;
+  EnterCriticalSection(fInstanceLock);
+  try
+    P := pointer(fInstances);
+    for i := 1 to fInstanceCapacity do begin
+      if (P^.InstanceID<>0) and (P^.Instance<>nil) then
+        inc(result,aEvent(self,P^,aOpaque));
+      inc(P);
+    end;
+  finally
+    LeaveCriticalSection(fInstanceLock);
+  end;
+end;
+
 procedure TServiceFactoryServerInstance.SafeFreeInstance(Factory: TServiceFactoryServer);
 var Obj: TInterfacedObject;
 begin
@@ -62319,8 +62402,8 @@ begin
         ct := FindIniNameValue(pointer(head), HEADER_CONTENT_TYPE_UPPER);
         if (resp[1] in ['[','{','"']) and IdemPChar(pointer(ct), JSON_CONTENT_TYPE_UPPER) then
           SynLog.Log(sllServiceReturn,resp,self,MAX_SIZE_RESPONSE_LOG) else
-          SynLog.Log(sllServiceReturn,'TServiceCustomAnswer=% % len=%',
-            [status,ct,length(resp)],self);
+          SynLog.Log(sllServiceReturn,'TServiceCustomAnswer=% % len=% %',
+            [status,ct,length(resp),EscapeToShort(resp)],self);
       end;
     {$endif WITHLOG}
     aServiceCustomAnswer^.Status := status;

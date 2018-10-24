@@ -1,4 +1,4 @@
-/// SQLite3 3.24.0 Database engine - statically linked for Windows/Linux 32 bit
+/// SQLite3 3.25.2 Database engine - statically linked for Windows/Linux
 // - this unit is a part of the freeware Synopse mORMot framework,
 // licensed under a MPL/GPL/LGPL tri-license; version 1.18
 unit SynSQLite3Static;
@@ -48,7 +48,7 @@ unit SynSQLite3Static;
 
 
 
-    Statically linked SQLite3 3.24.0 engine
+    Statically linked SQLite3 3.25.2 engine
    *****************************************
 
   To be declared in your project uses clause:  will fill SynSQlite3.sqlite3
@@ -77,7 +77,7 @@ unit SynSQLite3Static;
 
   Version 1.18
   - initial revision, extracted from SynSQLite3.pas unit
-  - updated SQLite3 engine to latest version 3.24.0
+  - updated SQLite3 engine to latest version 3.25.2
   - now all sqlite3_*() API calls are accessible via sqlite3.*()
   - our custom file encryption is now called via sqlite3.key() - i.e. official
     SQLite Encryption Extension (SEE) sqlite3_key() API - and works for database
@@ -1009,12 +1009,13 @@ function sqlite3_key(DB: TSQLite3DB; key: pointer; keyLen: Integer): integer; cd
 function sqlite3_rekey(DB: TSQLite3DB; key: pointer; keyLen: Integer): integer; cdecl; external;
 function sqlite3_create_function(DB: TSQLite3DB; FunctionName: PUTF8Char;
   nArg, eTextRep: integer; pApp: pointer; xFunc, xStep: TSQLFunctionFunc;
-  xFinal: TSQLFunctionFinal): Integer;
-  cdecl; external;
+  xFinal: TSQLFunctionFinal): Integer; cdecl; external;
 function sqlite3_create_function_v2(DB: TSQLite3DB; FunctionName: PUTF8Char;
   nArg, eTextRep: integer; pApp: pointer; xFunc, xStep: TSQLFunctionFunc;
-  xFinal: TSQLFunctionFinal; xDestroy: TSQLDestroyPtr): Integer;
-  cdecl; external;
+  xFinal: TSQLFunctionFinal; xDestroy: TSQLDestroyPtr): Integer; cdecl; external;
+function sqlite3_create_window_function(DB: TSQLite3DB; FunctionName: PUTF8Char;
+  nArg, eTextRep: integer; pApp: pointer; xStep: TSQLFunctionFunc;
+  xFinal, xValue: TSQLFunctionFinal; xInverse: TSQLFunctionFunc; xDestroy: TSQLDestroyPtr): Integer;   cdecl; external;
 function sqlite3_create_collation(DB: TSQLite3DB; CollationName: PUTF8Char;
   StringEncoding: integer; CollateParam: pointer; cmp: TSQLCollateFunc): integer; cdecl; external;
 function sqlite3_libversion: PUTF8Char; cdecl; external;
@@ -1123,7 +1124,7 @@ function sqlite3_trace_v2(DB: TSQLite3DB; Mask: integer; Callback: TSQLTraceCall
 
 const
   // error message if statically linked sqlite3.o(bj) does not match this
-  EXPECTED_SQLITE3_VERSION = {$ifdef ANDROID}''{$else}'3.24.0'{$endif};
+  EXPECTED_SQLITE3_VERSION = {$ifdef ANDROID}''{$else}'3.25.2'{$endif};
 
 constructor TSQLite3LibraryStatic.Create;
 var error: RawUTF8;
@@ -1140,6 +1141,7 @@ begin
   extended_errcode     := @sqlite3_extended_errcode;
   create_function      := @sqlite3_create_function;
   create_function_v2   := @sqlite3_create_function_v2;
+  create_window_function := @sqlite3_create_window_function;
   create_collation     := @sqlite3_create_collation;
   last_insert_rowid    := @sqlite3_last_insert_rowid;
   busy_timeout         := @sqlite3_busy_timeout;

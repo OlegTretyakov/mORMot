@@ -238,7 +238,6 @@ uses
 {$else MSWINDOWS}
   {$undef USEWININET}
   {$ifdef FPC}
-  Sockets,
   SynFPCSock,
   SynFPCLinux,
   BaseUnix, // for fpgetrlimit/fpsetrlimit
@@ -2560,6 +2559,8 @@ const
   STATUS_SERVERERROR = 500;
   /// HTTP Status Code for "Not Implemented"
   STATUS_NOTIMPLEMENTED = 501;
+  /// HTTP Status Code for "HTTP Version Not Supported"
+  STATUS_HTTPVERSIONNONSUPPORTED = 505;
 
   {$ifdef MSWINDOWS}
   /// can be used with THttpApiServer.AuthenticationSchemes to enable all schemes
@@ -2674,6 +2675,22 @@ function GetIPAddresses(Kind: TIPAddress = tiaAny): TSockStringDynArray;
 // - may be used to enumerate all adapters
 function GetIPAddressesText(const Sep: SockString = ' ';
   PublicOnly: boolean = false): SockString;
+
+type
+  /// interface name/address pairs as returned by GetMacAddresses
+  TMacAddress = record
+    /// contains e.g. 'eth0' on Linux
+    name: SockString;
+    /// contains e.g. '12:50:b6:1e:c6:aa' from /sys/class/net/eth0/adddress
+    address: SockString;
+  end;
+  TMacAddressDynArray = array of TMacAddress;
+
+/// enumerate all Mac addresses of the current computer
+function GetMacAddresses: TMacAddressDynArray;
+
+/// enumerate all Mac addresses of the current computer as 'name1=addr1 name2=addr2'
+function GetMacAddressesText: SockString;
 
 /// low-level text description of  Socket error code
 // - if Error is -1, will call WSAGetLastError to retrieve the last error code
@@ -3700,6 +3717,7 @@ end;
 
 const
   HexChars: array[0..15] of AnsiChar = '0123456789ABCDEF';
+  HexCharsLower: array[0..15] of AnsiChar = '0123456789abcdef';
 
 procedure BinToHexDisplay(Bin: PByte; BinBytes: integer; var result: shortstring);
 var j: cardinal;
@@ -3859,6 +3877,24 @@ end;
 
 {$ifdef MSWINDOWS}
 
+function MacToText(pMacAddr: PByteArray): SockString;
+var P: PAnsiChar;
+    i: integer;
+begin
+  SetLength(result,17);
+  P := pointer(result);
+  i := 0;
+  repeat
+    P[0] := HexCharsLower[pMacAddr[i] shr 4];
+    P[1] := HexCharsLower[pMacAddr[i] and $F];
+    if i = 5 then
+      break;
+    P[2] := ':'; // as in Linux
+    inc(P,3);
+    inc(i);
+  until false;
+end;
+
 function SendARP(DestIp: DWORD; srcIP: DWORD; pMacAddr: pointer;
   PhyAddrLen: Pointer): DWORD; stdcall; external 'iphlpapi.dll';
 
@@ -3867,23 +3903,14 @@ function GetRemoteMacAddress(const IP: SockString): SockString;
 var dwRemoteIP: DWORD;
     PhyAddrLen: Longword;
     pMacAddr: array [0..7] of byte;
-    I: integer;
-    P: PAnsiChar;
 begin
   result := '';
   dwremoteIP := inet_addr(pointer(IP));
   if dwremoteIP<>0 then begin
     PhyAddrLen := 8;
     if SendARP(dwremoteIP, 0, @pMacAddr, @PhyAddrLen)=NO_ERROR then begin
-      if PhyAddrLen=6 then begin
-        SetLength(result,12);
-        P := pointer(result);
-        for i := 0 to 5 do begin
-          P[0] := HexChars[pMacAddr[i] shr 4];
-          P[1] := HexChars[pMacAddr[i] and $F];
-          inc(P,2);
-        end;
-      end;
+      if PhyAddrLen=6 then
+        result := MacToText(@pMacAddr);
     end;
   end;
 end;
@@ -3905,6 +3932,77 @@ type
 
 function GetIpAddrTable(pIpAddrTable: PMIB_IPADDRTABLE;
   var pdwSize: DWORD; bOrder: BOOL): DWORD; stdcall; external 'iphlpapi.dll';
+
+const
+  MAX_ADAPTER_ADDRESS_LENGTH = 8;
+  GAA_FLAG_SKIP_UNICAST = $1;
+  GAA_FLAG_SKIP_ANYCAST = $2;
+  GAA_FLAG_SKIP_MULTICAST = $4;
+  GAA_FLAG_SKIP_DNS_SERVER = $8;
+  GAA_FLAG_SKIP_FRIENDLY_NAME = $20;
+  GAA_FLAG_INCLUDE_ALL_INTERFACES = $100; // Vista+
+  GAA_FLAGS = GAA_FLAG_SKIP_UNICAST or GAA_FLAG_SKIP_ANYCAST or
+    GAA_FLAG_SKIP_MULTICAST or GAA_FLAG_SKIP_DNS_SERVER or
+    GAA_FLAG_SKIP_FRIENDLY_NAME; // or GAA_FLAG_INCLUDE_ALL_INTERFACES;
+  IfOperStatusUp = 1;
+type
+  SOCKET_ADDRESS = record
+    lpSockaddr: PSOCKADDR;
+    iSockaddrLength: Integer;
+  end;
+  PIP_ADAPTER_UNICAST_ADDRESS = pointer;
+  PIP_ADAPTER_ANYCAST_ADDRESS = pointer;
+  PIP_ADAPTER_DNS_SERVER_ADDRESS = pointer;
+  PIP_ADAPTER_MULTICAST_ADDRESS = pointer;
+  PIP_ADAPTER_ADDRESSES = ^_IP_ADAPTER_ADDRESSES;
+  _IP_ADAPTER_ADDRESSES = record
+    Union: record
+      case Integer of
+        0: (
+          Alignment: ULONGLONG);
+        1: (
+          Length: ULONG;
+          IfIndex: DWORD);
+    end;
+    Next: PIP_ADAPTER_ADDRESSES;
+    AdapterName: PAnsiChar;
+    FirstUnicastAddress: PIP_ADAPTER_UNICAST_ADDRESS;
+    FirstAnycastAddress: PIP_ADAPTER_ANYCAST_ADDRESS;
+    FirstMulticastAddress: PIP_ADAPTER_MULTICAST_ADDRESS;
+    FirstDnsServerAddress: PIP_ADAPTER_DNS_SERVER_ADDRESS;
+    DnsSuffix: PWCHAR;
+    Description: PWCHAR;
+    FriendlyName: PWCHAR;
+    PhysicalAddress: array [0..MAX_ADAPTER_ADDRESS_LENGTH - 1] of BYTE;
+    PhysicalAddressLength: DWORD;
+    Flags: DWORD;
+    Mtu: DWORD;
+    IfType: ULONG;
+    OperStatus: DWORD;
+    // below fields are only available on Windows XP with SP1 and later
+    Ipv6IfIndex: ULONG;
+    ZoneIndices: array [0..15] of DWORD;
+    FirstPrefix: pointer;
+    // below fields are only available on Windows Vista and later
+    TransmitLinkSpeed: Int64;
+    ReceiveLinkSpeed: Int64;
+    FirstWinsServerAddress: pointer;
+    FirstGatewayAddress: pointer;
+    Ipv4Metric: ULONG;
+    Ipv6Metric: ULONG;
+    Luid: Int64;
+    Dhcpv4Server: SOCKET_ADDRESS;
+    CompartmentId: DWORD;
+    NetworkGuid: TGUID;
+    ConnectionType: DWORD;
+    TunnelType: DWORD;
+    // DHCP v6 Info following
+  end;
+
+function GetAdaptersAddresses(Family: ULONG; Flags: DWORD; Reserved: pointer;
+  pAdapterAddresses: PIP_ADAPTER_ADDRESSES; pOutBufLen: PULONG): DWORD; stdcall;
+  external 'iphlpapi.dll';
+
 
 function GetIPAddresses(Kind: TIPAddress): TSockStringDynArray;
 var Table: MIB_IPADDRTABLE;
@@ -3932,7 +4030,7 @@ begin
     SetLength(result,n);
 end;
 
-{$else}
+{$else MSWINDOWS}
 
 function GetFileOpenLimit(hard: boolean=false): integer;
 var limit: TRLIMIT;
@@ -4077,12 +4175,110 @@ begin
     IPAddressesText[PublicOnly] := result;
 end;
 
+var
+  MacAddressesSearched: boolean;
+  MacAddresses: TMacAddressDynArray;
+  MacAddressesText: SockString;
+
+procedure GetSmallFile(const fn: TFileName; out result: SockString);
+var tmp: array[byte] of AnsiChar;
+    F: THandle;
+    t: PtrInt;
+begin
+  F := FileOpen(fn, fmOpenRead or fmShareDenyNone);
+  if PtrInt(F) < 0 then
+   exit;
+  t := FileRead(F, tmp, SizeOf(tmp));
+  FileClose(F);
+  while (t > 0) and (tmp[t - 1] <= ' ') do dec(t); // trim right
+  if t > 0 then
+    SetString(result, PAnsiChar(@tmp), t);
+end;
+
+procedure RetrieveMacAddresses;
+var n: integer;
+{$ifdef LINUX}
+   SR: TSearchRec;
+   fn: TFileName;
+   f: SockString;
+{$endif LINUX}
+{$ifdef MSWINDOWS}
+   tmp: array[word] of byte;
+   siz: ULONG;
+   p: PIP_ADAPTER_ADDRESSES;
+{$endif MSWINDOWS}
+begin
+  n := 0;
+  {$ifdef LINUX}
+  if FindFirst('/sys/class/net/*', faDirectory, SR) = 0 then begin
+    repeat
+      if (SR.Name <> 'lo') and (SR.Name[1] <> '.') then begin
+        fn := '/sys/class/net/' + SR.Name;
+        GetSmallFile(fn + '/flags', f);
+        if (length(f) > 2) and // e.g. '0x40' or '0x1043'
+           (HttpChunkToHex32(@f[3]) and (IFF_UP or IFF_LOOPBACK) = IFF_UP) then begin
+          GetSmallFile(fn + '/address', f);
+          if f <> '' then begin
+            SetLength(MacAddresses, n + 1);
+            MacAddresses[n].name := SR.Name;
+            MacAddresses[n].address := f;
+            inc(n);
+          end;
+        end;
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+  {$endif LINUX}
+  {$ifdef MSWINDOWS}
+  siz := SizeOf(tmp);
+  p := @tmp;
+  if GetAdaptersAddresses(AF_UNSPEC, GAA_FLAGS, nil, p, @siz) = ERROR_SUCCESS then begin
+    repeat
+      if (p^.Flags <> 0) and (p^.OperStatus = IfOperStatusUp) and
+         (p^.PhysicalAddressLength = 6) then begin
+        SetLength(MacAddresses, n + 1);
+        MacAddresses[n].name := {$ifdef UNICODE}UTF8String{$else}UTF8Encode{$endif}(WideString(p^.Description));
+        MacAddresses[n].address := MacToText(@p^.PhysicalAddress);
+        inc(n);
+      end;
+      p := p^.Next;
+    until p = nil;
+  end;
+  {$endif MSWINDOWS}
+  MacAddressesSearched := true;
+end;
+
+function GetMacAddresses: TMacAddressDynArray;
+begin
+  if not MacAddressesSearched then
+    RetrieveMacAddresses;
+  result := MacAddresses;
+end;
+
+function GetMacAddressesText: SockString;
+var i: integer;
+begin
+  result := MacAddressesText;
+  if (result <> '') or MacAddressesSearched then
+    exit;
+  RetrieveMacAddresses;
+  result := '';
+  if MacAddresses = nil then
+    exit;
+  for i := 0 to high(MacAddresses) do
+    with MacAddresses[i] do
+      result := result + name + '=' + address + ' ';
+  SetLength(result, length(result) - 1);
+  MacAddressesText := result;
+end;
 
 {$ifndef NOXPOWEREDNAME}
 const
   XPOWEREDNAME = 'X-Powered-By';
   XPOWEREDVALUE = XPOWEREDPROGRAM + ' synopse.info';
 {$endif}
+
 
 { TURI }
 
@@ -4230,7 +4426,7 @@ var sin: TVarSin;
     IP: SockString;
     socktype, ipproto: integer;
     {$ifndef MSWINDOWS}
-    serveraddr: sockaddr;
+    serveraddr: TSockAddr;
     {$endif}
 begin
   result := -1;
@@ -5131,7 +5327,7 @@ begin
   try
   try
     // send request - we use SockSend because writeln() is calling flush()
-    // -> all header will be sent at once
+    // -> all headers will be sent at once
     RequestSendHeader(url,method);
     if KeepAlive>0 then
       SockSend(['Keep-Alive: ',KeepAlive,#13#10'Connection: Keep-Alive']) else
@@ -5148,19 +5344,19 @@ begin
     SockRecvLn(Command); // will raise ECrtSocket on any error
     if TCPPrefix<>'' then
       if Command<>TCPPrefix then begin
-        result :=  505;
+        result :=  STATUS_HTTPVERSIONNONSUPPORTED; // 505
         exit;
       end else
       SockRecvLn(Command);
     P := pointer(Command);
     if IdemPChar(P,'HTTP/1.') then begin
-      result := GetCardinal(P+9); // get http numeric status code
+      result := GetCardinal(P+9); // get http numeric status code (200,404...)
       if result=0 then begin
-        result :=  505;
+        result := STATUS_HTTPVERSIONNONSUPPORTED;
         exit;
       end;
       while result=100 do begin
-        repeat // 100 CONTINUE will just be ignored client side
+        repeat // 100 CONTINUE is just to be ignored client side
           SockRecvLn(Command);
           P := pointer(Command);
         until IdemPChar(P,'HTTP/1.');  // ignore up to next command
@@ -5169,7 +5365,7 @@ begin
       if P[7]='0' then
         KeepAlive := 0; // HTTP/1.0 -> force connection close
     end else begin // error on reading answer
-      DoRetry(505); // 505=wrong format
+      DoRetry(STATUS_HTTPVERSIONNONSUPPORTED); // 505=wrong format
       exit;
     end;
     GetHeader; // read all other headers
@@ -5245,17 +5441,17 @@ begin
   if URI.From(aURI) then
     if URI.Https then
       {$ifdef USEWININET}
-      result := TWinHTTP.Get(aURI,inHeaders,true,outHeaders) else
+      result := TWinHTTP.Get(aURI,inHeaders,{weakCA=}true,outHeaders) else
       {$else}
       {$ifdef USELIBCURL}
-      result := TCurlHTTP.Get(aURI,inHeaders,true,outHeaders) else
+      result := TCurlHTTP.Get(aURI,inHeaders,{weakCA=}true,outHeaders) else
       {$else}
       raise ECrtSocket.CreateFmt('https is not supported by HttpGet(%s)',[aURI]) else
       {$endif}
       {$endif USEWININET}
       result := HttpGet(URI.Server,URI.Port,URI.Address,inHeaders,outHeaders) else
     result := '';
-  {$ifdef LINUX}
+  {$ifdef LINUX_RAWDEBUGVOIDHTTPGET}
   if result='' then
     writeln('HttpGet returned VOID for ',URI.server,':',URI.Port,' ',URI.Address);
   {$endif}
@@ -8350,25 +8546,25 @@ begin
             HttpAuthStatusFailure:
               Context.fAuthenticationStatus := hraFailed;
             end;
-        // retrieve body
-        if HTTP_REQUEST_FLAG_MORE_ENTITY_BODY_EXISTS and Req^.Flags<>0 then begin
-          with Req^.Headers.KnownHeaders[reqContentLength] do
-            InContentLength := GetCardinal(pRawValue,pRawValue+RawValueLength);
-          with Req^.Headers.KnownHeaders[reqContentEncoding] do
-            SetString(InContentEncoding,pRawValue,RawValueLength);
-          if (InContentLength>0) and (MaximumAllowedContentLength>0) and
-             (InContentLength>MaximumAllowedContentLength) then begin
-            SendError(STATUS_PAYLOADTOOLARGE,'Rejected');
+        with Req^.Headers.KnownHeaders[reqContentLength] do
+          InContentLength := GetCardinal(pRawValue,pRawValue+RawValueLength);
+        if (InContentLength>0) and (MaximumAllowedContentLength>0) and
+           (InContentLength>MaximumAllowedContentLength) then begin
+          SendError(STATUS_PAYLOADTOOLARGE,'Rejected');
+          continue;
+        end;
+        if Assigned(OnBeforeBody) then begin
+          with Context do
+            Err := OnBeforeBody(URL,Method,InHeaders,InContentType,RemoteIP,InContentLength,fUseSSL);
+          if Err<>STATUS_SUCCESS then begin
+            SendError(Err,'Rejected');
             continue;
           end;
-          if Assigned(OnBeforeBody) then begin
-            with Context do
-              Err := OnBeforeBody(URL,Method,InHeaders,InContentType,RemoteIP,InContentLength,fUseSSL);
-            if Err<>STATUS_SUCCESS then begin
-              SendError(Err,'Rejected');
-              continue;
-            end;
-          end;
+        end;
+        // retrieve body
+        if HTTP_REQUEST_FLAG_MORE_ENTITY_BODY_EXISTS and Req^.Flags<>0 then begin
+          with Req^.Headers.KnownHeaders[reqContentEncoding] do
+            SetString(InContentEncoding,pRawValue,RawValueLength);
           if InContentLength<>0 then begin
             SetLength(Context.fInContent,InContentLength);
             BufRead := pointer(Context.InContent);
