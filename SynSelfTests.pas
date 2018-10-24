@@ -1116,7 +1116,7 @@ type
   end;
 
   /// a record used by IComplexCalculator.EchoRecord
-  TConsultaNav = object
+  {$ifdef UNICODE}TConsultaNav = record{$else}TConsultaNav = object{$endif}
   public
     MaxRows, Row0, RowCount: int64;
     IsSQLUpdateBack, EOF: boolean;
@@ -4480,6 +4480,18 @@ begin
   assert(tmp='0002-00-00');
 end;
 
+{$ifdef FPC}
+Function _LocalTimeToUniversal(LT: TDateTime;TZOffset: Integer): TDateTime;
+begin
+  if (TZOffset > 0) then
+    Result := LT - EncodeTime(TZOffset div 60, TZOffset mod 60, 0, 0)
+  else if (TZOffset < 0) then
+    Result := LT + EncodeTime(Abs(TZOffset) div 60, Abs(TZOffset) mod 60, 0, 0)
+  else
+    Result := LT;
+end;
+{$endif}
+
 procedure TTestLowLevelCommon.TimeZones;
 var tz: TSynTimeZone;
     d: TTimeZoneData;
@@ -4547,8 +4559,12 @@ begin
     tz.Free;
   end;
   dt := NowUTC;
+  {$ifdef FPC}
+  local := _LocalTimeToUniversal(Now(), - GetLocalTimeOffset);
+  CheckSame(local - dt, 0, 1E-5, 'NowUTC should not shift or truncate time');
+  {$endif}
   sleep(200);
-  Check(not SameValue(dt,NowUTC), 'NowUTC should not truncate time');
+  Check(not SameValue(dt,NowUTC), 'NowUTC should not truncate time to 5 sec resolution');
   {$ifdef MSWINDOWS}
   tz := TSynTimeZone.CreateDefault;
   try
@@ -6864,6 +6880,8 @@ var i: Integer;
     git,git2: TTestCustomJSONGitHubs;
     item,value: PUTF8Char;
 begin
+  if zendframeworkJson='' then
+    exit; // avoid GPF e.g. on Windows XP where https is broken
   TTextWriter.RegisterCustomJSONSerializerFromText(TypeInfo(TTestCustomJSONGitHub),
     __TTestCustomJSONGitHub).Options := Options;
   FillCharFast(git,sizeof(git),0);
@@ -11881,7 +11899,7 @@ var sw: ICommandLine;
   end;
 begin
   if DirectoryExists('synecc') then
-    DirectoryDelete('synecc','*.*',true) else
+    DirectoryDelete('synecc',FILES_ALL,true) else
     CreateDir('synecc');
   SetCurrentDir('synecc');
   try

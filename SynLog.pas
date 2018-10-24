@@ -426,6 +426,10 @@ type
   /// how file existing shall be handled during logging
   TSynLogExistsAction = (acOverwrite, acAppend);
 
+  /// callback signature used by TSynLogFamilly.OnBeforeException
+  // - should return false to log the exception, or true to ignore it
+  TSynLogOnBeforeException = function(aExceptionContext: TSynLogExceptionContext): boolean of object;
+
   /// regroup several logs under an unique family name
   // - you should usualy use one family per application or per architectural
   // module: e.g. a server application may want to log in separate files the
@@ -475,6 +479,7 @@ type
     fStackTraceUse: TSynLogStackTraceUse;
     fFileExistsAction: TSynLogExistsAction;
     fExceptionIgnore: TList;
+    fOnBeforeException: TSynLogOnBeforeException;
     fEchoToConsole: TSynLogInfos;
     fEchoCustom: TOnTextWriterEcho;
     fEchoRemoteClient: TObject;
@@ -529,6 +534,12 @@ type
     // ! TSQLLog.Family.ExceptionIgnore.Add(EConvertError);
     // - you may also trigger ESynLogSilent exceptions for silent process
     property ExceptionIgnore: TList read fExceptionIgnore;
+    /// you can let exceptions be ignored from a callback
+    // - if set and returns true, the given exception won't be logged
+    // - may be handy e.g. when working with code triggerring a lot of
+    // exceptions (e.g. Indy), where ExceptionIgnore could be refined
+    property OnBeforeException: TSynLogOnBeforeException
+      read fOnBeforeException write fOnBeforeException;
     /// event called to archive the .log content after a defined delay
     // - Destroy will parse DestinationPath folder for *.log files matching
     // ArchiveAfterDays property value
@@ -690,7 +701,7 @@ type
     /// how existing log file shall be handled
     property FileExistsAction: TSynLogExistsAction read fFileExistsAction write fFileExistsAction;
     /// define how the logger will emit its line feed
-    // - by default (FALSE), a single CR (#13) char will be written, to save
+    // - by default (FALSE), a single LF (#10) char will be written, to save
     // storage space
     // - you can set this property to TRUE, so that CR+LF (#13#10) chars will
     // be appended instead
@@ -2560,7 +2571,9 @@ begin
   if (SynLog=nil) or not (Ctxt.ELevel in SynLog.fFamily.Level) then
     exit;
   if (Ctxt.EClass=ESynLogSilent) or
-     (SynLog.fFamily.ExceptionIgnore.IndexOf(Ctxt.EClass)>=0) then
+     (SynLog.fFamily.ExceptionIgnore.IndexOf(Ctxt.EClass)>=0) or
+     (Assigned(SynLog.fFamily.OnBeforeException) and
+      SynLog.fFamily.OnBeforeException(Ctxt)) then
     exit;
   if SynLog.LogHeaderLock(Ctxt.ELevel,false) then
   try
@@ -3418,7 +3431,7 @@ begin
                 stream.Position := start;
                 repeat
                   inc(start)
-                until (stream.Read(c,1)=0) or (c=#13);
+                until (stream.Read(c,1)=0) or (ord(c) in [10,13]);
               end else
                 stream.Position := start;
               len := endpos-start;
@@ -4187,7 +4200,7 @@ var WithinEvents: boolean;
       LogCurrentTime;
       fWriter.AddShort(LOG_LEVEL_TEXT[sllNewRun]);
     end else
-      fWriter.Add(#13);
+      fWriter.Add(#10);
   end;
 
 begin
@@ -4265,7 +4278,7 @@ begin
       AddDateTime(NowUTC);
     if WithinEvents then
       AddEndOfLine(sllNone) else
-      Add(#13,#13);
+      Add(#10,#10);
     FlushToStream;
     EchoReset; // header is not to be sent to console
   end;

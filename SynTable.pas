@@ -96,6 +96,10 @@ function IsValidIP4Address(P: PUTF8Char): boolean;
 // - consider using TMatch or TMatchs if you expect to reuse the pattern
 function IsMatch(const Pattern, Text: RawUTF8; CaseInsensitive: boolean=false): boolean;
 
+/// return TRUE if the supplied content matchs a glob pattern, using VCL strings
+// - is a wrapper around IsMatch() with fast UTF-8 conversion
+function IsMatchString(const Pattern, Text: string; CaseInsensitive: boolean=false): boolean;
+
 type
   PMatch = ^TMatch;
   /// low-level structure used by IsMatch() for actual glob search
@@ -137,6 +141,9 @@ type
     // - this method IS thread-safe, will use stack to UTF-8 temporary conversion
     // if possible, and won't lock
     function MatchString(const aText: string): boolean;
+    /// returns TRUE if this search pattern matches another
+    function Equals(const aAnother{$ifndef DELPHI5OROLDER}: TMatch{$endif}): boolean;
+      {$ifdef HASINLINE}inline;{$endif}
   end;
   /// use SetMatchs() to initialize such an array from a CSV pattern text
   TMatchDynArray = array of TMatch;
@@ -191,6 +198,12 @@ function SetMatchs(const CSVPattern: RawUTF8; CaseInsensitive: boolean;
 // be pointed to by the Match[].Pattern private field
 function SetMatchs(CSVPattern: PUTF8Char; CaseInsensitive: boolean;
   Match: PMatch; MatchMax: integer): integer; overload;
+
+/// search if one TMach is already registered in the Several[] dynamic array
+function MatchExists(const One: TMatch; const Several: TMatchDynArray): boolean;
+
+/// add one TMach if not already registered in the Several[] dynamic array
+function MatchAdd(const One: TMatch; var Several: TMatchDynArray): boolean;
 
 /// apply the CSV-supplied glob patterns to an array of RawUTF8
 // - any text not maching the pattern will be deleted from the array
@@ -5519,11 +5532,24 @@ begin
   temp.Done;
 end;
 
+function TMatch.Equals(const aAnother{$ifndef DELPHI5OROLDER}: TMatch{$endif}): boolean;
+begin
+  result := (PMax = TMatch(aAnother).PMax) and (Upper = TMatch(aAnother).Upper) and
+    CompareMemSmall(Pattern, TMatch(aAnother).Pattern, PMax + 1);
+end;
+
 function IsMatch(const Pattern, Text: RawUTF8; CaseInsensitive: boolean): boolean;
 var match: TMatch;
 begin
   match.Prepare(Pattern, CaseInsensitive, {reuse=}false);
   result := match.Match(Text);
+end;
+
+function IsMatchString(const Pattern, Text: string; CaseInsensitive: boolean=false): boolean;
+var match: TMatch;
+begin
+  match.Prepare(StringToUTF8(Pattern), CaseInsensitive, {reuse=}false);
+  result := match.Match(StringToUTF8(Text));
 end;
 
 function SetMatchs(const CSVPattern: RawUTF8; CaseInsensitive: boolean;
@@ -5569,6 +5595,29 @@ begin
         break;
       inc(CSVPattern);
     until false;
+end;
+
+function MatchExists(const One: TMatch; const Several: TMatchDynArray): boolean;
+var
+  i: integer;
+begin
+  result := true;
+  for i := 0 to high(Several) do
+    if Several[i].Equals(One) then
+      exit;
+  result := false;
+end;
+
+function MatchAdd(const One: TMatch; var Several: TMatchDynArray): boolean;
+var
+  n: integer;
+begin
+  result := not MatchExists(One, Several);
+  if result then begin
+    n := length(Several);
+    SetLength(Several, n + 1);
+    Several[n] := One;
+  end;
 end;
 
 procedure FilterMatchs(const CSVPattern: RawUTF8; CaseInsensitive: boolean;
