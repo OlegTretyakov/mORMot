@@ -31,6 +31,7 @@ Contributors
   Esmond
   Esteban Martin (EMartin)
   Eva Freimann (EVaF)
+  F-Vicente
   Goran Despalatovic (gigo)
   Jean-Baptiste Roussia (jbroussia)
   Joe (jokusoft)
@@ -46,9 +47,11 @@ Contributors
   MChaos
   Miab3
   Michael (EgonHugeist)
+  Michalis Kamburelis 
   MilesYou
   Mingda
   Nzsolt
+  Oleg Tretyakov
   Ondrej (reddwarf)
   Pavel (mpv)
   Pierre le Riche

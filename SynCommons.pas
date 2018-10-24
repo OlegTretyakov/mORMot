@@ -34,6 +34,7 @@ unit SynCommons;
    - ASiwon
    - Chaa
    - BigStar
+   - f-vicente
    - itSDS
    - Johan Bontes
    - kevinday
@@ -3225,6 +3226,7 @@ procedure AddRawUTF8(var Values: TRawUTF8DynArray; var ValuesCount: integer;
 type
   /// simple stack-allocated type for handling a type names list
   {$ifdef UNICODE}TPropNameList = record{$else}TPropNameList = object{$endif}
+  public
     Values: TRawUTF8DynArray;
     Count: Integer;
     /// initialize the list
@@ -3441,6 +3443,15 @@ function FileSize(const FileName: TFileName): Int64; overload;
 // - returns 0 if file doesn't exist
 function FileSize(F: THandle): Int64; overload;
 
+/// get low-level file information, in a cross-platform way
+// - returns true on success
+// - here file write/creation time are given as TUnixMSTime values, for better
+// cross-platform process - note that FileCreateDateTime may not be supported
+// by most Linux file systems, so the oldest timestamp available is returned
+// as failover on such systems (probably the latest file metadata writing)
+function FileInfoByHandle(aFileHandle: THandle; out FileId, FileSize,
+  LastWriteAccess, FileCreateDateTime: Int64): Boolean;
+
 /// get a file date and time, from a FindFirst/FindNext search
 // - the returned timestamp is in local time, not UTC
 // - this method would use the F.Timestamp field available since Delphi XE2
@@ -3451,12 +3462,16 @@ function SearchRecToDateTime(const F: TSearchRec): TDateTime;
 function SearchRecValidFile(const F: TSearchRec): boolean;
   {$ifdef HASINLINE}inline;{$endif}
 
+const
+  /// operating-system dependent wildchar to match all files in a folder
+  FILES_ALL = {$ifdef MSWINDOWS}'*.*'{$else}'*'{$endif};
+
 /// delete the content of a specified directory
 // - only one level of file is deleted within the folder: no recursive deletion
 // is processed by this function (for safety)
 // - if DeleteOnlyFilesNotDirectory is TRUE, it won't remove the folder itself,
 // but just the files found in it
-function DirectoryDelete(const Directory: TFileName; const Mask: TFileName='*.*';
+function DirectoryDelete(const Directory: TFileName; const Mask: TFileName=FILES_ALL;
   DeleteOnlyFilesNotDirectory: Boolean=false; DeletedCount: PInteger=nil): Boolean;
 
 /// delete the files older than a given age in a specified directory
@@ -3466,7 +3481,7 @@ function DirectoryDelete(const Directory: TFileName; const Mask: TFileName='*.*'
 // is processed by this function, unless Recursive is TRUE
 // - if Recursive=true, caller should set TotalSize^=0 to have an accurate value
 function DirectoryDeleteOlderFiles(const Directory: TFileName; TimePeriod: TDateTime;
-   const Mask: TFileName='*.*'; Recursive: Boolean=false; TotalSize: PInt64=nil): Boolean;
+   const Mask: TFileName=FILES_ALL; Recursive: Boolean=false; TotalSize: PInt64=nil): Boolean;
 
 /// creates a directory if not already existing
 // - returns the full expanded directory name, including trailing backslash
@@ -3481,6 +3496,7 @@ type
   {$A-}
   /// file found result item, as returned by FindFiles()
   {$ifdef UNICODE}TFindFiles = record{$else}TFindFiles = object{$endif}
+  public
     /// the matching file name, including its folder name
     Name: TFileName;
     /// the matching file attributes
@@ -3516,6 +3532,9 @@ function FindFilesDynArrayToFileNames(const Files: TFindFilesDynArray): TFileNam
 /// DirectoryExists returns a boolean value that indicates whether the
 //  specified directory exists (and is actually a directory)
 function DirectoryExists(const Directory: string): Boolean;
+
+/// case-insensitive comparison of filenames
+function SameFileName(const S1, S2: TFileName): Boolean;
 
 /// retrieve the corresponding environment variable value
 function GetEnvironmentVariable(const Name: string): string;
@@ -4585,6 +4604,7 @@ type
     function FindIndex(const Elem; aIndex: PIntegerDynArray;
       aCompare: TDynArraySortCompare): PtrInt;
     function GetArrayTypeName: RawUTF8;
+    function GetArrayTypeShort: PShortString;
     function GetIsObjArray: boolean; {$ifdef HASINLINE}inline;{$endif}
     function ComputeIsObjArray: boolean;
     procedure SetIsObjArray(aValue: boolean); {$ifdef HASINLINE}inline;{$endif}
@@ -4958,7 +4978,8 @@ type
     // want to add another TDynArray, use AddDynArray() method
     // - you can specify the start index and the number of items to take from
     // the source dynamic array (leave as -1 to add till the end)
-    procedure AddArray(const DynArrayVar; aStartIndex: integer=0; aCount: integer=-1);
+    // - returns the number of items added to the array
+    function AddArray(const DynArrayVar; aStartIndex: integer=0; aCount: integer=-1): integer;
     {$ifndef DELPHI5OROLDER}
     /// fast initialize a wrapper for an existing dynamic array of the same type
     // - is slightly faster than
@@ -5086,8 +5107,10 @@ type
     property KnownType: TDynArrayKind read fKnownType;
     /// the known RTTI information of the whole array
     property ArrayType: pointer read fTypeInfo;
-    /// the known type name of the whole array
+    /// the known type name of the whole array, as RawUTF8
     property ArrayTypeName: RawUTF8 read GetArrayTypeName;
+    /// the known type name of the whole array, as PShortString
+    property ArrayTypeShort: PShortString read GetArrayTypeShort;
     /// the internal in-memory size of one element, as retrieved from RTTI
     property ElemSize: cardinal read fElemSize;
     /// the internal type information of one element, as retrieved from RTTI
@@ -5608,7 +5631,7 @@ type
   {$ifdef UNICODE}TSynLocker = record{$else}TSynLocker = object{$endif}
   private
     fSection: TRTLCriticalSection;
-    fLocked: boolean;
+    fLocked, fInitialized: boolean;
     {$ifndef NOVARIANTS}
     function GetVariant(Index: integer): Variant;
     procedure SetVariant(Index: integer; const Value: Variant);
@@ -5692,6 +5715,10 @@ type
     function ProtectMethod: IUnknown;
     /// returns true if the mutex is currently locked by another thread
     property IsLocked: boolean read fLocked;
+    /// returns true if the Init method has been called for this mutex
+    // - is only relevant if the whole object has been previously filled with 0,
+    // i.e. as part of a class, but may not be accurate when allocated on stack
+    property IsInitialized: boolean read fInitialized;
     {$ifndef NOVARIANTS}
     /// safe locked access to a Variant value
     // - you may store up to 7 variables, using an 0..6 index, shared with
@@ -5863,6 +5890,7 @@ type
 
   /// used to store one list of hashed RawUTF8 in TRawUTF8Interning pool
   {$ifdef UNICODE}TRawUTF8InterningSlot = record{$else}TRawUTF8InterningSlot = object{$endif}
+  public
     /// actual RawUTF8 storage
     Value: TRawUTF8DynArray;
     /// hashed access to the Value[] list
@@ -5989,6 +6017,7 @@ type
   // in Delphi 2009/2010 compiler (at least): this structure is not initialized
   // if defined as an object on the stack, but will be as a record :(
   {$ifdef UNICODE}TSynNameValue = record{$else}TSynNameValue = object{$endif}
+  private
     fDynArray: TDynArrayHashed;
     fOnAdd: TSynNameValueNotify;
     function GetBlobData: RawByteString;
@@ -6629,7 +6658,7 @@ procedure DynArrayCopy(var Dest; const Source; SourceMaxElem: integer;
 /// fill a dynamic array content from a binary serialization as saved by
 // DynArraySave() / TDynArray.Save()
 // - Value shall be set to the target dynamic array field
-// - just a function helper around TDynArray.Init + TDynArray.Load
+// - just a function helper around TDynArray.Init + TDynArray.LoadFrom
 function DynArrayLoad(var Value; Source: PAnsiChar; TypeInfo: pointer): PAnsiChar;
 
 /// serialize a dynamic array content as binary, ready to be loaded by
@@ -7749,8 +7778,6 @@ type
     // - note that due to a limitation of the "array of const" format, cardinal
     // values should be type-casted to Int64() - otherwise the integer mapped
     // value will be transmitted, therefore wrongly
-    // - CR = #13 writes CR+LF chars (i.e. if you write #13 in the Format
-    // string, it will output #13#10 chars)
     {$ifdef OLDTEXTWRITERFORMAT}
     // - $ dollar = #36 indicates an integer to be written with 2 digits and a comma
     // - | vertical = #124 will write the next char e.g. Add('%|$',[10]) will write '10$'
@@ -7770,10 +7797,12 @@ type
     /// append CR+LF (#13#10) chars
     // - this method won't call EchoAdd() registered events - use AddEndOfLine()
     // method instead
+    // - AddEndOfLine() will append either CR+LF (#13#10) or LF (#10) depending
+    // on a flag
     procedure AddCR;
     /// mark an end of line, ready to be "echoed" to registered listeners
-    // - append a CR (#13) char or CR+LF (#13#10) chars to the buffer, depending
-    // on the EndOfLineCRLF property value (default is CR, to minimize storage)
+    // - append a LF (#10) char or CR+LF (#13#10) chars to the buffer, depending
+    // on the EndOfLineCRLF property value (default is LF, to minimize storage)
     // - any callback registered via EchoAdd() will monitor this line
     // - used e.g. by TSynLog for console output, as stated by Level parameter
     procedure AddEndOfLine(aLevel: TSynLogInfo=sllNone);
@@ -8184,8 +8213,8 @@ type
     // array of the same simple types or record
     // - RTTI textual information shall be supplied as text, with the
     // same format as with a pascal record:
-    // ! 'A,B,C: integer; D: RawUTF8; E: record E1,E2: double; end;'
-    // ! 'A,B,C: integer; D: RawUTF8; E: array of record E1,E2: double; end;'
+    // ! 'A,B,C: integer; D: RawUTF8; E: record E1,E2: double;'
+    // ! 'A,B,C: integer; D: RawUTF8; E: array of record E1,E2: double;'
     // ! 'A,B,C: integer; D: RawUTF8; E: array of SynUnicode; F: array of TGUID'
     // or a shorter alternative syntax for records and arrays:
     // ! 'A,B,C: integer; D: RawUTF8; E: {E1,E2: double}'
@@ -8313,7 +8342,7 @@ type
     // or WrittenBytes for the number of bytes already written to disk
     property TextLength: cardinal read GetLength;
     /// define how AddEndOfLine method stores its line feed characters
-    // - by default (FALSE), it will append a CR (#13) char to the buffer
+    // - by default (FALSE), it will append a LF (#10) char to the buffer
     // - you can set this property to TRUE, so that CR+LF (#13#10) chars will
     // be appended instead
     // - is just a wrapper around twoEndOfLineCRLF item in CustomOptions
@@ -9098,8 +9127,8 @@ type
       CheckMagicForCompressed: boolean=false): RawByteString; overload;
       {$ifdef HASINLINE}inline;{$endif}
     /// compress a memory buffer with crc32c hashing to a RawByteString
-    procedure Compress(Plain: PAnsiChar; PlainLen: integer; out Result: RawByteString;
-      CompressionSizeTrigger: integer=100; CheckMagicForCompressed: boolean=false); overload;
+    function Compress(Plain: PAnsiChar; PlainLen: integer; CompressionSizeTrigger: integer=100;
+      CheckMagicForCompressed: boolean=false): RawByteString; overload;
     /// compress a memory buffer with crc32c hashing
     // - supplied Comp buffer should contain at least CompressDestLen(PlainLen) bytes
     function Compress(Plain, Comp: PAnsiChar; PlainLen, CompLen: integer;
@@ -9114,6 +9143,10 @@ type
     /// uncompress a RawByteString memory buffer with crc32c hashing
     function Decompress(const Comp: RawByteString; Load: TAlgoCompressLoad=aclNormal): RawByteString; overload;
       {$ifdef HASINLINE}inline;{$endif}
+    /// uncompress a RawByteString memory buffer with crc32c hashing
+    // - returns TRUE on success
+    function TryDecompress(const Comp: RawByteString; out Dest: RawByteString;
+      Load: TAlgoCompressLoad=aclNormal): boolean;
     /// uncompress a memory buffer with crc32c hashing
     procedure Decompress(Comp: PAnsiChar; CompLen: integer; out Result: RawByteString;
       Load: TAlgoCompressLoad=aclNormal); overload;
@@ -9299,6 +9332,10 @@ type
     // - returns the index of the deleted item, -1 if aKey was not found
     // - this method is thread-safe, since it will lock the instance
     function Delete(const aKey): integer;
+    /// delete a key/value association from its internal index
+    // - this method is not thread-safe: you should use fSafe.Lock/Unlock
+    // e.g. then Find/FindValue to retrieve the index value
+    function DeleteAt(aIndex: integer): boolean;
     /// search and delete all deprecated items according to TimeoutSeconds
     // - returns how many items have been deleted
     // - you can call this method very often: it will ensure that the
@@ -9326,8 +9363,9 @@ type
     /// search of a stored value by its primary key, and return a local copy
     // - so this method is thread-safe
     // - returns TRUE if aKey was found, FALSE if no match exists
-    // - will update the associated timeout value of the entry, if applying
-    function FindAndCopy(const aKey; out aValue): boolean;
+    // - will update the associated timeout value of the entry, unless
+    // aUpdateTimeOut is set to false
+    function FindAndCopy(const aKey; out aValue; aUpdateTimeOut: boolean=true): boolean;
     /// search of a stored value by its primary key, then delete and return it
     // - returns TRUE if aKey was found, fill aValue with its content,
     // and delete the entry in the internal storage
@@ -9771,6 +9809,8 @@ type
     // - aStream parameter could be e.g. THeapMemoryStream or TRawByteStringStream
     constructor Create(aClass: TStreamClass; aTempBuf: pointer; aTempLen: integer); overload;
     /// release internal TStream (after AssignToHandle call)
+    // - warning: an explicit call to Flush is needed to write the data pending
+    // in internal buffer
     destructor Destroy; override;
     /// append some data at the current position
     procedure Write(Data: pointer; DataLen: integer); overload;
@@ -10002,7 +10042,8 @@ type
   // - is also safer, since will check for reaching end of buffer
   // - raise a EFastReader exception on decoding error (e.g. if a buffer
   // overflow may occur) or call OnErrorOverflow/OnErrorData event handlers
-  TFastReader = object
+  {$ifdef UNICODE}TFastReader = record{$else}TFastReader = object{$endif}
+  public
     /// the current position in the memory
     P: PAnsiChar;
     /// the last position in the buffer
@@ -12157,6 +12198,7 @@ type
   // - FPC's TSystemTime in datih.inc does NOT match Windows TSystemTime fields!
   // - also used to store a Date/Time in TSynTimeZone internal structures
   {$ifdef UNICODE}TSynSystemTime = record{$else}TSynSystemTime = object{$endif}
+  public
     Year, Month, DayOfWeek, Day,
     Hour, Minute, Second, MilliSecond: word;
     /// set all fields to 0
@@ -12210,6 +12252,7 @@ type
   // - TTimeLogBits.Value has a 38-bit precision, so features exact representation
   // as JavaScript numbers (stored in a 52-bit mantissa)
   {$ifdef UNICODE}TTimeLogBits = record{$else}TTimeLogBits = object{$endif}
+  public
     /// the bit-encoded value itself, which follows an abstract "year" of 16
     // months of 32 days of 32 hours of 64 minutes of 64 seconds
     // - bits 0..5   = Seconds (0..59)
@@ -12696,6 +12739,7 @@ type
 
   /// used to store Time Zone information for a single area in TSynTimeZone
   {$ifdef UNICODE}TTimeZoneData = record{$else}TTimeZoneData = object{$endif}
+  public
     id: TTimeZoneID;
     display: RawUTF8;
     tzi: TTimeZoneInfo;
@@ -13052,7 +13096,7 @@ type
     osArch, osAurox, osDebian, osFedora, osGentoo, osKnoppix, osMint, osMandrake,
     osMandriva, osNovell, osUbuntu, osSlackware, osSolaris, osSuse, osSynology,
     osTrustix, osClear, osUnited, osRedHat, osLFS, osOracle, osMageia, osCentOS,
-    osCloud, osXen, osAmazon, osCoreOS);
+    osCloud, osXen, osAmazon, osCoreOS, osAlpine);
   /// the recognized Windows versions
   // - defined even outside MSWINDOWS to allow process e.g. from monitoring tools
   TWindowsVersion = (
@@ -13082,10 +13126,10 @@ const
     '10', '10 64bit', 'Server 2016', 'Server 2016 64bit');
 
   /// the compiler family used
-  COMP_TEXT = {$ifdef FPC}'fpc'{$else}'delphi'{$endif};
+  COMP_TEXT = {$ifdef FPC}'Fpc'{$else}'Delphi'{$endif};
   /// the target Operating System used for compilation, as text
-  OS_TEXT = {$ifdef MSWINDOWS}'win'{$else}{$ifdef DARWIN}'osx'{$else}
-  {$ifdef BSD}'bsd'{$else}{$ifdef LINUX}'linux'{$else}'posix'
+  OS_TEXT = {$ifdef MSWINDOWS}'Win'{$else}{$ifdef DARWIN}'OSX'{$else}
+  {$ifdef BSD}'BSD'{$else}{$ifdef LINUX}'Linux'{$else}'Posix'
   {$endif}{$endif}{$endif}{$endif};
   /// the CPU architecture used for compilation
   CPU_ARCH_TEXT = {$ifdef CPUX86}'x86'{$else}{$ifdef CPUX64}'x64'{$else}
@@ -13350,7 +13394,7 @@ procedure SetExecutableVersion(const aVersionText: RawUTF8); overload;
 type
   /// identify an operating system folder
   TSystemPath = (
-    spCommonData, spUserData, spCommonDocuments, spUserDocuments, spTempFolder);
+    spCommonData, spUserData, spCommonDocuments, spUserDocuments, spTempFolder, spLog);
 
 /// returns an operating system folder
 // - will return the full path of a given kind of private or shared folder,
@@ -15479,6 +15523,11 @@ type
     ccDarkGray, ccLightBlue, ccLightGreen, ccLightCyan, ccLightRed, ccLightMagenta,
     ccYellow, ccWhite);
 
+{$ifdef FPC}{$ifdef Linux}
+var
+  stdoutIsTTY: boolean;
+{$endif}{$endif}
+
 /// change the Windows console text writing color
 // - you should call this procedure to initialize StdOut global variable, if
 // you manually initialized the Windows console, e.g. via the following code:
@@ -16870,6 +16919,7 @@ type
   // - Msg is set for each pending message in this task FIFO
   TOnSynBackgroundTimerProcess = procedure(Sender: TSynBackgroundTimer;
     Event: TWaitResult; const Msg: RawUTF8) of object;
+
   /// used by TSynBackgroundTimer internal registration list
   TSynBackgroundTimerTask = record
     OnProcess: TOnSynBackgroundTimerProcess;
@@ -17424,26 +17474,26 @@ type
   end;
 
 
-/// convert a size to a human readable value
-// - append TB, GB, MB, KB or B symbol
-// - for TB, GB, MB and KB, add one fractional digit
+/// convert a size to a human readable value power-of-two metric value
+// - append EB, PB, TB, GB, MB, KB or B symbol
+// - for EB, PB, TB, GB, MB and KB, add one fractional digit
 procedure KB(bytes: Int64; out result: TShort16); overload;
 
 /// convert a size to a human readable value
-// - append TB, GB, MB, KB or B symbol
-// - for TB, GB, MB and KB, add one fractional digit
+// - append EB, PB, TB, GB, MB, KB or B symbol
+// - for EB, PB, TB, GB, MB and KB, add one fractional digit
 function KB(bytes: Int64): TShort16; overload;
   {$ifdef FPC_OR_UNICODE}inline;{$endif} // Delphi 2007 is buggy as hell
 
 /// convert a string size to a human readable value
-// - append TB, GB, MB, KB or B symbol
-// - for TB, GB, MB and KB, add one fractional digit
+// - append EB, PB, TB, GB, MB, KB or B symbol
+// - for EB, PB, TB, GB, MB and KB, add one fractional digit
 function KB(const buffer: RawByteString): TShort16; overload;
   {$ifdef FPC_OR_UNICODE}inline;{$endif}
 
 /// convert a size to a human readable value
-// - append TB, GB, MB, KB or B symbol
-// - for TB, GB, MB and KB, add one fractional digit
+// - append EB, PB, TB, GB, MB, KB or B symbol
+// - for EB, PB, TB, GB, MB and KB, add one fractional digit
 procedure KBU(bytes: Int64; var result: RawUTF8);
 
 /// convert a micro seconds elapsed time into a human readable value
@@ -17625,6 +17675,7 @@ uses
   SynFPCLinux,
   Unix,
   dynlibs,
+  termio,
   {$ifdef BSD}
   ctypes,
   sysctl,
@@ -23922,7 +23973,9 @@ begin
 end;
 
 type
-  TFormatUTF8 = object // only supported token is %, with any const arguments
+  // only supported token is %, with any const arguments
+  {$ifdef UNICODE}TFormatUTF8 = record{$else}TFormatUTF8 = object{$endif}
+  public
     b: PTempUTF8;
     L,argN: integer;
     blocks: array[0..63] of TTempUTF8; // to avoid most heap allocations
@@ -26747,6 +26800,20 @@ begin
     result := @temp else
     result := nil;
 end;
+{$else}
+procedure SetLinuxDistrib(const release: RawUTF8);
+var
+  distrib: TOperatingSystem;
+  dist: RawUTF8;
+begin
+  for distrib := osArch to high(distrib) do begin
+    dist := UpperCase(TrimLeftLowerCaseShort(ToText(distrib)));
+    if PosI(pointer(dist),release)>0 then begin
+      OS_KIND := distrib;
+      break;
+    end;
+  end;
+end;
 {$endif BSD}
 
 procedure RetrieveSystemInfo;
@@ -26756,7 +26823,6 @@ var modname, beg: PUTF8Char;
     {$else}
     cpuinfo: PUTF8Char;
     proccpuinfo,prod,prodver,release,dist: RawUTF8;
-    distrib: TOperatingSystem;
     SR: TSearchRec;
     {$endif BSD}
 begin
@@ -26813,17 +26879,17 @@ begin
        release := StringToUTF8(SR.Name);
     release := split(release,'-');
     dist := split(trim(StringFromFile('/etc/'+SR.Name)),#10);
-    if (dist<>'') and (PosEx('=',dist)=0) then
-      release := dist; // e.g. 'Red Hat Enterprise Linux Server release 6.7 (Santiago)'
+    if (dist<>'') and (PosEx('=',dist)=0) and (PosEx(' ',dist)>0) then
+      SetLinuxDistrib(dist) // e.g. 'Red Hat Enterprise Linux Server release 6.7 (Santiago)'
+    else
+      dist := '';
     FindClose(SR);
   end;
-  if release<>'' then begin
-    for distrib := osArch to high(distrib) do begin
-      dist := UpperCase(TrimLeftLowerCaseShort(ToText(distrib)));
-      if PosI(pointer(dist),release)>0 then begin
-        OS_KIND := distrib;
-        break;
-      end;
+  if (release<>'') and (OS_KIND=osLinux) then begin
+    SetLinuxDistrib(release);
+    if (OS_KIND=osLinux) and (dist<>'') then begin
+      SetLinuxDistrib(dist);
+      release := dist;
     end;
     if (OS_KIND=osLinux) and ((PosEx('RH',release)>0) or (PosEx('Red Hat',release)>0)) then
       OS_KIND := osRedHat;
@@ -28526,8 +28592,8 @@ begin
     exit;
   Dest.AddShort('const');
   if Comment<>'' then
-    Dest.Add(#13'  // %',[Comment]);
-  Dest.Add(#13'  %: array[0..%] of byte = (',[ConstName,Len-1]);
+    Dest.Add(#13#10'  // %',[Comment]);
+  Dest.Add(#13#10'  %: array[0..%] of byte = (',[ConstName,Len-1]);
   P := pointer(Data);
   repeat
     if len>PerLine then
@@ -28543,7 +28609,7 @@ begin
     dec(Len,line);
   until Len=0;
   Dest.CancelLastComma;
-  Dest.Add(');'#13'  %_LEN = SizeOf(%);'#13,[ConstName,ConstName]);
+  Dest.Add(');'#13#10'  %_LEN = SizeOf(%);'#13#10,[ConstName,ConstName]);
 end;
 
 function UpperCaseUnicode(const S: RawUTF8): RawUTF8;
@@ -29224,7 +29290,7 @@ asm // eax=source edx=search
         cmp     dl, 13
         ja      @1
         je      @e
-        OR      dl, dl
+        or      dl, dl
         jz      @0
         cmp     dl, 10
         jne     @1
@@ -29991,6 +30057,49 @@ begin
     res.Lo := GetFileSize(F,@res.Hi); // from WinAPI or SynKylix/SynFPCLinux
 end;
 
+function FileInfoByHandle(aFileHandle: THandle; out FileId, FileSize,
+  LastWriteAccess, FileCreateDateTime: Int64): Boolean;
+var
+ lastreadaccess: TUnixMSTime;
+ {$ifdef MSWINDOWS}
+ lp: TByHandleFileInformation;
+ {$else}
+ lp: {$ifdef FPC}stat{$else}TStatBuf64{$endif};
+ r: integer;
+ {$endif MSWINDOWS}
+begin
+{$ifdef MSWINDOWS}
+  result := GetFileInformationByHandle(aFileHandle,lp);
+  if result then begin
+    LastWriteAccess := FileTimeToUnixMSTime(lp.ftLastWriteTime);
+    FileCreateDateTime := FileTimeToUnixMSTime(lp.ftCreationTime);
+    lastreadaccess := FileTimeToUnixMSTime(lp.ftLastAccessTime);
+    PInt64Rec(@FileSize).lo := lp.nFileSizeLow;
+    PInt64Rec(@FileSize).hi := lp.nFileSizeHigh;
+    PInt64Rec(@FileId).lo := lp.nFileIndexLow;
+    PInt64Rec(@FileId).hi := lp.nFileIndexHigh;
+{$else}
+    r := {$ifdef FPC}FpFStat{$else}fstat64{$endif}(aFileHandle, lp);
+  result := r >= 0;
+  if result then begin
+    FileId := lp.st_ino;
+    FileSize := lp.st_size;
+    lastreadaccess := lp.st_atime * MSecsPerSec;
+    LastWriteAccess := lp.st_mtime * MSecsPerSec;
+    {$ifdef OPENBSD}
+    if (lp.st_birthtime <> 0) and (lp.st_birthtime < lp.st_ctime) then
+      lp.st_ctime:= lp.st_birthtime;
+    {$endif}
+    FileCreateDateTime := lp.st_ctime * MSecsPerSec;
+{$endif MSWINDOWS}
+    if LastWriteAccess <> 0 then
+      if (FileCreateDateTime = 0) or (FileCreateDateTime > LastWriteAccess) then
+        FileCreateDateTime:= LastWriteAccess;
+    if lastreadaccess <> 0 then
+      if (FileCreateDateTime = 0) or (FileCreateDateTime > lastreadaccess) then
+        FileCreateDateTime:= lastreadaccess;
+  end;
+end;
 
 function FileAgeToDateTime(const FileName: TFileName): TDateTime;
 {$ifdef MSWINDOWS}
@@ -30065,7 +30174,7 @@ begin
   {$ifndef DELPHI5OROLDER}
   {$WARN SYMBOL_DEPRECATED OFF} // for faVolumeID
   {$endif}
-  result := (F.Attr and (faDirectory
+  result := (F.Name<>'') and (F.Attr and (faDirectory
     {$ifdef MSWINDOWS}+faVolumeID+faSysFile+faHidden)=0) and (F.Name[1]<>'.')
     {$else})=0){$endif};
   {$ifndef DELPHI5OROLDER}
@@ -30233,13 +30342,16 @@ end;
 
 {$ifdef DELPHI5OROLDER}
 
-/// DirectoryExists returns a boolean value that indicates whether the
-//  specified directory exists (and is actually a directory)
 function DirectoryExists(const Directory: string): boolean;
 var Code: Integer;
 begin
   Code := GetFileAttributes(pointer(Directory));
   result := (Code<>-1) and (FILE_ATTRIBUTE_DIRECTORY and Code<>0);
+end;
+
+function SameFileName(const S1, S2: TFileName): Boolean;
+begin
+  result := AnsiCompareFileName(S1,S2)=0;
 end;
 
 function GetEnvironmentVariable(const Name: string): string;
@@ -32793,7 +32905,7 @@ begin
 end;
 
 procedure AppendCSVValues(const CSV: string; const Values: array of string;
-  var Result: string; const AppendBefore: string=#13#10);
+  var Result: string; const AppendBefore: string);
 var Caption: string;
     i, bool: integer;
     P: PChar;
@@ -35390,7 +35502,9 @@ begin // use 'YYMMDDHHMMSS' format
   end;
   DecodeDate(DateTime,Y,M,D);
   if Y > 1999 then
-    dec(Y,2000) else
+    if Y < 2100 then
+      dec(Y,2000) else
+      Y := 99 else
     Y := 0;
   DecodeTime(DateTime,HH,MM,SS,MS);
   {$ifndef CPUX86}tab := @TwoDigitLookupW;{$endif}
@@ -35456,14 +35570,15 @@ end;
 function NowUTC: TDateTime;
 {$ifdef MSWINDOWS}
 var ft: TFileTime;
-    {$ifdef CPU64}nano100: Int64;{$endif}
+    {$ifdef CPU64}nano100: Int64; d: double;{$endif}
 begin
   GetSystemTimeAsFileTime(ft); // very fast, with 100 ns unit
   {$ifdef CPU64}
   FileTimeToInt64(ft,nano100);
   // in two explicit steps to circumvent weird precision error on FPC
-  result := nano100-DateFileTimeDelta;
-  result := result/(10000000.0*SecsPerDay);
+  // having d: double is important here
+  d := (nano100-DateFileTimeDelta) / 10000000;
+  result := d/SecsPerDay;
   {$else} // use PInt64 to avoid URW699 with Delphi 6 / Kylix
   dec(PInt64(@ft)^,DateFileTimeDelta);
   result := PInt64(@ft)^/(10000000.0*SecsPerDay);
@@ -36936,6 +37051,7 @@ end;
 
 type
   {$ifdef UNICODE}TLecuyer = record{$else}TLecuyer = object{$endif}
+  public
     rs1, rs2, rs3: cardinal;
     seedcount: cardinal;
     procedure Seed(entropy: PByteArray; entropylen: integer);
@@ -37935,35 +38051,35 @@ begin
   filescount := 0;
   W := TTextWriter.CreateOwnedStream(temp);
   try
-    // header multipart
+    // header - see https://www.w3.org/Protocols/rfc1341/7_2_Multipart.html
     NewBound;
     MultiPartContentType := 'Content-Type: multipart/form-data; boundary='+bound;
     for i := 0 to len-1 do
     with MultiPart[i] do begin
       if FileName='' then
-        W.Add('--%'#13'Content-Disposition: form-data; name="%"'#13+
-          'Content-Type: %'#13#13'%'#13'--%'#13,
+        W.Add('--%'#13#10'Content-Disposition: form-data; name="%"'#13#10+
+          'Content-Type: %'#13#10#13#10'%'#10'--%'#13#10,
           [bound,Name,ContentType,Content,bound]) else begin
         // if this is the first file, create the header for files
         if filescount=0 then begin
           if i>0 then
             NewBound;
-          W.Add('Content-Disposition: form-data; name="files"'#13+
-            'Content-Type: multipart/mixed; boundary=%'#13#13,[bound]);
+          W.Add('Content-Disposition: form-data; name="files"'#13#10+
+            'Content-Type: multipart/mixed; boundary=%'#13#10#13#10,[bound]);
         end;
         inc(filescount);
-        W.Add('--%'#13'Content-Disposition: file; filename="%"'#13+
-          'Content-Type: %'#13,[bound,FileName,ContentType]);
+        W.Add('--%'#13#10'Content-Disposition: file; filename="%"'#13#10+
+          'Content-Type: %'#13#10,[bound,FileName,ContentType]);
         if Encoding<>'' then
-          W.Add('Content-Transfer-Encoding: %'#13,[Encoding]);
+          W.Add('Content-Transfer-Encoding: %'#13#10,[Encoding]);
         W.AddCR;
         W.AddString(MultiPart[i].Content);
-        W.Add(#13'--%'#13,[bound]);
+        W.Add(#13#10'--%'#13#10,[bound]);
       end;
     end;
     // footer multipart
     for i := boundcount-1 downto 0 do
-      W.Add('--%--'#13, [boundaries[i]]);
+      W.Add('--%--'#13#10, [boundaries[i]]);
     W.SetText(MultiPartContent);
     result := True;
   finally
@@ -38139,6 +38255,7 @@ end;
 type
   /// used internaly for faster quick sort
   {$ifdef UNICODE}TQuickSortRawUTF8 = record{$else}TQuickSortRawUTF8 = object{$endif}
+  public
     Values: PPointerArray;
     Compare: TUTF8Compare;
     CoValues: PIntegerArray;
@@ -38696,11 +38813,12 @@ const
   CSIDL_COMMON_APPDATA = $0023;
   CSIDL_COMMON_DOCUMENTS = $002E;
   CSIDL: array[TSystemPath] of integer = (
-  // spCommonData, spUserData, spCommonDocuments, spUserDocuments, spTempFolder
-    CSIDL_COMMON_APPDATA, CSIDL_LOCAL_APPDATA,
-    CSIDL_COMMON_DOCUMENTS, CSIDL_PERSONAL, 0);
+    // spCommonData, spUserData, spCommonDocuments
+    CSIDL_COMMON_APPDATA, CSIDL_LOCAL_APPDATA, CSIDL_COMMON_DOCUMENTS,
+    // spUserDocuments, spTempFolder, spLog
+    CSIDL_PERSONAL, 0, CSIDL_COMMON_APPDATA);
   ENV: array[TSystemPath] of TFileName = (
-    'ALLUSERSAPPDATA', 'LOCALAPPDATA', '', '', 'TEMP');
+    'ALLUSERSAPPDATA', 'LOCALAPPDATA', '', '', 'TEMP', 'ALLUSERSAPPDATA');
 var tmp: array[0..MAX_PATH] of char;
     k: TSystemPath;
 begin
@@ -38719,11 +38837,19 @@ begin
 end;
 {$else MSWINDOWS}
 var
-  _HomePath,_TempPath: TFileName;
+  _HomePath, _TempPath, _LogPath: TFileName;
 
 function GetSystemPath(kind: TSystemPath): TFileName;
 begin
-  if kind=spTempFolder then begin
+  case kind of
+  spLog: begin
+    if _LogPath='' then
+      if DirectoryExists('/var/log') then
+        _LogPath := '/var/log/' else
+        _LogPath := GetSystemPath(spUserDocuments); // fallback to HOME
+    result := _LogPath;
+  end;
+  spTempFolder: begin
     if _TempPath='' then begin
       _TempPath := GetEnvironmentVariable('TMPDIR'); // POSIX
       if _TempPath='' then
@@ -38739,6 +38865,7 @@ begin
     if _HomePath='' then // POSIX requires a value for $HOME
       _HomePath := IncludeTrailingPathDelimiter(GetEnvironmentVariable('HOME'));
     result := _HomePath;
+  end;
   end;
 end;
 {$endif MSWINDOWS}
@@ -47590,7 +47717,7 @@ begin
   if ElemType=nil then // FPC: nil also if not Kind in tkManagedTypes
     if GetIsObjArray then
       raise ESynException.CreateUTF8('TDynArray.SaveTo(%) is a T*ObjArray',
-        [PShortString(@PTypeInfo(ArrayType).NameLen)^]) else begin
+        [ArrayTypeShort^]) else begin
       // binary types: store as once
       n := n*integer(ElemSize);
       MoveFast(P^,Dest^,n);
@@ -47631,7 +47758,7 @@ begin
   if ElemType=nil then // FPC: nil also if not Kind in tkManagedTypes
     if GetIsObjArray then
       raise ESynException.CreateUTF8('TDynArray.SaveToLength(%) is a T*ObjArray',
-        [PShortString(@PTypeInfo(ArrayType).NameLen)^]) else
+        [ArrayTypeShort^]) else
       inc(result,integer(ElemSize)*n) else begin
     P := fValue^;
     case PTypeKind(ElemType)^ of // inlined the most used kind of items
@@ -47704,6 +47831,13 @@ var
 function TDynArray.GetArrayTypeName: RawUTF8;
 begin
   TypeInfoToName(fTypeInfo,result);
+end;
+
+function TDynArray.GetArrayTypeShort: PShortString;
+begin
+  if fTypeInfo=nil then
+    result := @NULCHAR else
+    result := PShortString(@PTypeInfo(fTypeInfo).NameLen);
 end;
 
 function TDynArray.ToKnownType(exactType: boolean): TDynArrayKind;
@@ -48154,7 +48288,7 @@ begin
   if ElemType=nil then // FPC: nil also if not Kind in tkManagedTypes
     if GetIsObjArray then
       raise ESynException.CreateUTF8('TDynArray.LoadFrom(%) is a T*ObjArray',
-        [PShortString(@PTypeInfo(ArrayType).NameLen)^]) else begin
+        [ArrayTypeShort^]) else begin
       // binary type was stored directly
       n := n*integer(ElemSize);
       MoveFast(Source^,P^,n);
@@ -48386,6 +48520,7 @@ end;
 type
   // internal structure used to make QuickSort faster & with less stack usage
   {$ifdef UNICODE}TDynArrayQuickSort = record{$else}TDynArrayQuickSort = object{$endif}
+  public
     Compare: TDynArraySortCompare;
     Pivot: pointer;
     Index: PCardinalArray;
@@ -48894,7 +49029,7 @@ begin // this method is faster than default System.DynArraySetLength() function
   {$ifndef CPU64}
   if NeededSize>1024*1024*1024 then // max workable memory block is 1 GB
     raise ERangeError.CreateFmt('TDynArray SetLength(%s,%d) size concern',
-      [PShortString(@PTypeInfo(ArrayType).NameLen)^,NewLength]);
+      [ArrayTypeShort^,NewLength]);
   {$endif}
   // if not shared (refCnt=1), resize; if shared, create copy (not thread safe)
   if (p=nil) or (p^.refCnt=1) then begin
@@ -49010,7 +49145,7 @@ begin
   end;
 end;
 
-procedure TDynArray.Slice(var Dest; aCount: Cardinal; aFirstIndex: cardinal=0);
+procedure TDynArray.Slice(var Dest; aCount, aFirstIndex: cardinal);
 var n: Cardinal;
     D: PPointer;
     P: PAnsiChar;
@@ -49032,11 +49167,11 @@ begin
   end;
 end;
 
-procedure TDynArray.AddArray(const DynArrayVar; aStartIndex: integer;
-  aCount: integer);
+function TDynArray.AddArray(const DynArrayVar; aStartIndex, aCount: integer): integer;
 var c, n: integer;
     PS,PD: pointer;
 begin
+  result := 0;
   if fValue=nil then
     exit; // avoid GPF if void
   c := DynArrayLength(pointer(DynArrayVar));
@@ -49046,6 +49181,7 @@ begin
     aCount := c-aStartIndex;
   if aCount<=0 then
     exit;
+  result := aCount;
   n := GetCount;
   SetCount(n+aCount);
   PS := pointer(PtrUInt(DynArrayVar)+cardinal(aStartIndex)*ElemSize);
@@ -49768,7 +49904,7 @@ begin
   raise ESynException.CreateUTF8('TDynArrayHashed.% fatal collision: '+
     'aHashCode=% fHashsCount=% Count=% Capacity=% ArrayType=% fKnownType=%',
     [caller,CardinalToHexShort(aHashCode),fHashsCount,GetCount,GetCapacity,
-    PShortString(@PTypeInfo(ArrayType).NameLen)^,ToText(fKnownType)^]);
+     ArrayTypeShort^,ToText(fKnownType)^]);
 end;
 
 function TDynArrayHashed.GetHashFromIndex(aIndex: PtrInt): Cardinal;
@@ -50390,6 +50526,7 @@ begin
   InitializeCriticalSection(fSection);
   PaddingMaxUsedIndex := -1;
   fLocked := false;
+  fInitialized := true;
 end;
 
 procedure TSynLocker.Done;
@@ -50399,6 +50536,7 @@ begin
     if Padding[i].VType<>varUnknown then
       VarClear(variant(Padding[i]));
   DeleteCriticalSection(fSection);
+  fInitialized := false;
 end;
 
 procedure TSynLocker.Lock;
@@ -51558,7 +51696,7 @@ begin
     PWord(B+1)^ := 13+10 shl 8; // CR + LF
     inc(B,2);
   end else begin
-    B[1] := #13; // CR
+    B[1] := #10; // LF
     inc(B);
   end;
   if fEchos<>nil then begin
@@ -52475,7 +52613,6 @@ begin // we put const char > #127 as #??? -> asiatic MBCS codepage OK
     repeat
       case ord(F^) of
       0: exit;
-      13: AddCR;
       ord('%'): break;
       {$ifdef OLDTEXTWRITERFORMAT}
       164: AddCR; // currency sign -> add CR,LF
@@ -53833,7 +53970,9 @@ end;
 
 procedure TTextWriter.SetEndOfLineCRLF(aEndOfLineCRLF: boolean);
 begin
-  Include(fCustomOptions,twoEndOfLineCRLF);
+  if aEndOfLineCRLF then
+    include(fCustomOptions,twoEndOfLineCRLF) else
+    exclude(fCustomOptions,twoEndOfLineCRLF);
 end;
 
 function TTextWriter.GetLength: cardinal;
@@ -55674,6 +55813,10 @@ end;
 procedure TextColor(Color: TConsoleColor);
 const AnsiTbl : string[8]='04261537';
 begin
+{$ifdef FPC}{$ifdef Linux}
+  if not stdoutIsTTY then
+    exit;
+{$endif}{$endif}
   if ord(color)=TextAttr then
     exit;
   TextAttr := ord(color);
@@ -55922,7 +56065,7 @@ end;
 { ************ Unit-Testing classes and functions }
 
 procedure KB(bytes: Int64; out result: TShort16);
-const _B: array[0..3] of string[3] = (' KB',' MB',' GB',' TB');
+const _B: array[0..5] of string[3] = (' KB',' MB',' GB',' TB',' PB',' EB');
 var hi,rem,b: cardinal;
 begin
   if bytes<1 shl 10-(1 shl 10) div 10 then begin
@@ -55943,10 +56086,20 @@ begin
     b := 2;
     rem := bytes shr 20;
     hi := bytes shr 30;
-  end else begin
+  end else
+  if bytes<Int64(1) shl 50-(Int64(1) shl 50) div 10 then begin
     b := 3;
     rem := bytes shr 30;
     hi := bytes shr 40;
+  end else
+  if bytes<Int64(1) shl 60-(Int64(1) shl 60) div 10 then begin
+    b := 4;
+    rem := bytes shr 40;
+    hi := bytes shr 50;
+  end else begin
+    b := 5;
+    rem := bytes shr 50;
+    hi := bytes shr 60;
   end;
   rem := rem and 1023;
   if rem<>0 then
@@ -58976,6 +59129,20 @@ begin
   end;
 end;
 
+function TSynDictionary.DeleteAt(aIndex: integer): boolean;
+begin
+  if cardinal(aIndex)<cardinal(fSafe.Padding[DIC_KEYCOUNT].VInteger) then begin
+    fKeys.Delete(aIndex);
+    fKeys.ReHash;
+    fValues.Delete(aIndex);
+    if fSafe.Padding[DIC_TIMESEC].VInteger>0 then
+      fTimeOuts.Delete(aIndex);
+    result := true;
+  end
+  else
+    result := false;
+end;
+
 function TSynDictionary.InArray(const aKey, aArrayValue;
   aAction: TSynDictionaryInArray): boolean;
 var nested: TDynArray;
@@ -58984,7 +59151,7 @@ begin
   result := false;
   if (fValues.ElemType=nil) or (PTypeKind(fValues.ElemType)^<>tkDynArray) then
     raise ESynException.CreateUTF8('%.Values: % items are not dynamic arrays',
-      [self,PShortString(@PTypeInfo(fValues.ArrayType)^.NameLen)^]);
+      [self,fValues.ArrayTypeShort^]);
   fSafe.Lock;
   try
     ndx := fKeys.FindHashed(aKey);
@@ -59080,12 +59247,12 @@ begin
   result := fValues.ElemPtr(ndx);
 end;
 
-function TSynDictionary.FindAndCopy(const aKey; out aValue): boolean;
+function TSynDictionary.FindAndCopy(const aKey; out aValue; aUpdateTimeOut: boolean): boolean;
 var ndx: integer;
 begin
   fSafe.Lock;
   try
-    ndx := Find(aKey, {aUpdateTimeOut=}true);
+    ndx := Find(aKey, aUpdateTimeOut);
     if ndx>=0 then begin
       fValues.ElemCopyAt(ndx,aValue);
       result := true;
@@ -59334,7 +59501,7 @@ begin
       if NoCompression then
         trigger := maxInt else
         trigger := 128;
-      fCompressAlgo.Compress(tmp.buf,tmp.len,result,trigger);
+      result := fCompressAlgo.Compress(tmp.buf,tmp.len,trigger);
     end;
     tmp.Done;
   finally
@@ -60388,7 +60555,7 @@ begin
     algo := AlgoSynLZ;
   trig := SYNLZTRIG[nocompression];
   if fStream.Position=0 then // direct compression from internal buffer
-    algo.Compress(PAnsiChar(fBuffer),fPos,result,trig) else begin
+    result := algo.Compress(PAnsiChar(fBuffer),fPos,trig) else begin
     Flush;
     result := algo.Compress((fStream as TRawByteStringStream).DataString,trig);
   end;
@@ -61595,7 +61762,7 @@ begin
     result := 0 else
     with PSynLZTrailer(P+Len-SizeOf(TSynLZTrailer))^ do
       if (Magic=aMagic) and (HeaderRelativeOffset<Len) and
-         (PSynLZHead(P-HeaderRelativeOffset)^.Magic=aMagic) then
+         (PSynLZHead(P+Len-HeaderRelativeOffset)^.Magic=aMagic) then
         // trim existing content
         result := Len-HeaderRelativeOffset else
         result := Len;
@@ -62000,17 +62167,17 @@ end;
 function TAlgoCompress.Compress(const Plain: RawByteString;
   CompressionSizeTrigger: integer; CheckMagicForCompressed: boolean): RawByteString;
 begin
-  Compress(pointer(Plain),Length(Plain),result,CompressionSizeTrigger,CheckMagicForCompressed);
+  result := Compress(pointer(Plain),Length(Plain),CompressionSizeTrigger,CheckMagicForCompressed);
 end;
 
-procedure TAlgoCompress.Compress(Plain: PAnsiChar; PlainLen: integer;
-  out Result: RawByteString; CompressionSizeTrigger: integer; CheckMagicForCompressed: boolean);
+function TAlgoCompress.Compress(Plain: PAnsiChar; PlainLen: integer;
+  CompressionSizeTrigger: integer; CheckMagicForCompressed: boolean): RawByteString;
 var len: integer;
     R: PAnsiChar;
     crc: cardinal;
     tmp: array[0..16383] of AnsiChar;  // will resize Result in-place
 begin
-  if (self=nil) or (PlainLen=0) then
+  if (self=nil) or (PlainLen=0) or (Plain=nil) then
     exit;
   crc := AlgoHash(0,Plain,PlainLen);
   if (PlainLen<CompressionSizeTrigger) or
@@ -62144,6 +62311,22 @@ begin
   Decompress(pointer(Comp),length(Comp),result,Load);
 end;
 
+function TAlgoCompress.TryDecompress(const Comp: RawByteString;
+  out Dest: RawByteString; Load: TAlgoCompressLoad): boolean;
+var len: integer;
+begin
+  result := Comp='';
+  if result then
+    exit;
+  len := DecompressHeader(pointer(Comp),length(Comp),Load);
+  if len=0 then
+    exit; // invalid crc32c
+  SetString(Dest,nil,len);
+  if DecompressBody(pointer(Comp),pointer(Dest),length(Comp),len,Load) then
+    result := true else
+    Dest := '';
+end;
+
 function TAlgoCompress.Decompress(const Comp: RawByteString;
   out PlainLen: integer; var tmp: RawByteString; Load: TAlgoCompressLoad): pointer;
 begin
@@ -62270,14 +62453,14 @@ end;
 function SynLZCompress(const Data: RawByteString; CompressionSizeTrigger: integer;
   CheckMagicForCompressed: boolean): RawByteString;
 begin
-  AlgoSynLZ.Compress(pointer(Data),length(Data),result,CompressionSizeTrigger,
+  result := AlgoSynLZ.Compress(pointer(Data),length(Data),CompressionSizeTrigger,
     CheckMagicForCompressed);
 end;
 
 procedure SynLZCompress(P: PAnsiChar; PLen: integer; out Result: RawByteString;
   CompressionSizeTrigger: integer; CheckMagicForCompressed: boolean);
 begin
-  AlgoSynLZ.Compress(P,PLen,Result,CompressionSizeTrigger,CheckMagicForCompressed);
+  result := AlgoSynLZ.Compress(P,PLen,CompressionSizeTrigger,CheckMagicForCompressed);
 end;
 
 function SynLZCompress(P, Dest: PAnsiChar; PLen, DestLen: integer;
@@ -62456,10 +62639,10 @@ begin
   W := TTextWriter.Create(Dest,@temp,SizeOf(temp));
   try
     if (fMap.Size>0) and (fMap.Buffer[fMap.Size-1]>=' ') then
-      W.Add(#13);
+      W.Add(#10);
     for i := 0 to fAppendedLinesCount-1 do begin
       W.AddString(fAppendedLines[i]);
-      W.Add(#13);
+      W.Add(#10);
     end;
     W.FlushFinal;
   finally
@@ -64341,7 +64524,7 @@ begin
   if (MethodCount<=0) or not Assigned(Method) then
     exit;
   if (self=nil) or (MethodCount=1) or (fThreadPoolCount=0) then begin
-    Method(0,0); // no need to use a background thread here
+    Method(0,MethodCount-1); // no need (or impossible) to use background thread
     exit;
   end;
   use := MethodCount;
@@ -64901,6 +65084,9 @@ initialization
   MoveFast := @System.Move;
   {$ifdef FPC}
   FillCharFast := @System.FillChar; // FPC cross-platform RTL is optimized enough
+  {$ifdef Linux}
+  stdoutIsTTY := IsATTY(StdOutputHandle)=1;
+  {$endif}
   {$else}
   {$ifdef CPUARM}
   FillCharFast := @System.FillChar;
